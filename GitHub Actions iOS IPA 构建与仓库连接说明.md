@@ -62,7 +62,7 @@ git remote -v
 git push -u personal main
 ```
 
-上面的 `git push` 只是供你确认目标后执行的示例；本次调查没有安装 CLI、连接账户、添加 remote 或推送任何内容。执行前核对 `git remote -v`，确认 `personal` 是你新建的仓库。不要把 `personal` 改成上游地址，也不要向当前 `origin` 推送。当前本地 `main` 比 `origin/main` 多 6 个提交；首次推送到空的个人仓库会包含这 6 个提交。
+上面的 `git push` 只是供你确认目标后执行的示例；本次调查没有安装 CLI、连接账户、添加 remote 或推送任何内容。执行前核对 `git remote -v`，确认 `personal` 是你新建的仓库。不要把 `personal` 改成上游地址，也不要向当前 `origin` 推送。首次推送到空的个人仓库会上传本地分支的全部已提交历史，不会包含未跟踪文件。
 
 ### 其他方式
 
