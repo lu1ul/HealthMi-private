@@ -142,7 +142,7 @@ GitHub 的套餐、额度和 runner 名称可能调整，实际执行前以 GitH
 - 研究结论：Apple 的官方分发文档介绍了 archive、签名和导出 IPA 的常规流程；官方资料没有明确承诺“完全禁用签名后由 Xcode 导出 IPA”。因此本方案仅构建未签名的设备 `.app`，再由工作流按 `Payload/` 结构打包，并明确要求用户后续签名。
 - 已新增 `.github/workflows/build-unsigned-ipa.yml`：在 `macos-15` runner 安装 XcodeGen，生成工程，关闭代码签名，构建设备版 App 并打包 IPA；支持手动传入开发团队已注册的 Bundle Identifier，artifact 保留 7 天。
 - 已更新 README 的构建说明，指出 IPA 尚未签名、需要配置 HealthKit 能力并由用户后续签名。
-- 首次 Actions 运行已完成工程生成，但构建脚本在 Bash 3.2 下因空数组与 `set -u` 一起使用而退出，尚未运行 `xcodebuild`；已改为兼容空参数的函数调用并准备重试。
+- 首次 Actions 运行已完成工程生成，但构建脚本在 Bash 3.2 下因空数组与 `set -u` 一起使用而退出，尚未运行 `xcodebuild`；第二次运行修正了空数组问题后，发现 XcodeGen 工程需要通过 `HealthMi` scheme 与 `generic/platform=iOS` destination 构建，已相应调整。
 - 静态核对：确认工作流只申请 `contents: read` 权限，不读取证书或 profile；`git diff --check` 通过。当前 Windows 环境没有 Xcode，实际构建留待 macOS runner 重试；未运行 XCTest。
 - 当前实施状态：私有仓库创建、推送、GitHub Actions 构建和 artifact 下载结果待更新。
 
