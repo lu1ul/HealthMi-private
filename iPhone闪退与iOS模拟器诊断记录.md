@@ -112,3 +112,11 @@ HealthKit 在模拟器中的可用性和真实设备不同；模拟器启动检�
 
 - [Apple Xcode Build Settings Reference：`SWIFT_SKIP_AUTOLINKING_FRAMEWORKS`](https://developer.apple.com/documentation/xcode/build-settings-reference)
 - [Apple Frameworks and Weak Linking](https://developer.apple.com/library/archive/documentation/MacOSX/Conceptual/BPFrameworks/Concepts/WeakLinking.html)
+
+## 弱链接修复后的启动复测（2026-11-23）
+
+- 修复提交：`82fef0f fix: weak link SwiftData for iOS 16`；仅推送到个人私有仓库 `lu1ul/HealthMi-private`，没有推送到上游 `origin`。
+- iOS 16.4 复测：[GitHub Actions 运行 `45148900597`](https://github.com/lu1ul/HealthMi-private/actions/runs/45148900597) 成功。Xcode 16.4、iPhone 14、`com.apple.CoreSimulator.SimRuntime.iOS-16-4`；构建、安装和 launch 均通过，20 秒后应用进程仍在，未生成 HealthMi 崩溃报告。构建日志确认包含 `-weak_framework SwiftData`。
+- 新系统复测：[GitHub Actions 运行 `45149953346`](https://github.com/lu1ul/HealthMi-private/actions/runs/45149953346) 成功。runner 默认使用 iPhone 16 Pro、iOS 18.5 runtime；构建、安装和 launch 均通过，20 秒后应用进程仍在，未生成 HealthMi 崩溃报告。
+- 结论：弱链接配置解决了 iOS 16.4 上 dyld 因缺少 SwiftData.framework 而退出的问题，并保留了较新系统上的正常启动。此次没有用含真实 SwiftData 旧库的数据验证迁移，也没有测试用户签名后的 IPA 或 iOS 16.3 真机。
+- 两次 artifact 下载到忽略目录 `build/ios16.4-diagnostics-fixed/` 和 `build/runner-default-diagnostics/`；不纳入 Git。
