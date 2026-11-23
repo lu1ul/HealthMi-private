@@ -81,3 +81,21 @@ HealthKit 在模拟器中的可用性和真实设备不同；模拟器启动检�
 - 已手动运行 workflow_dispatch 并下载、检查 artifact；模拟器进程存活检查通过，见上方首次诊断结果。
 - 补充 Apple 官方 `.ips` 采集说明，供无需提供真机的后续诊断使用。
 - 根据用户提供的 iOS 16.3/TrollStore 环境核查 HealthKit entitlement，并检查此前生成的无签名 IPA。
+
+## GitHub iOS 16 模拟器可行性（2026-11-23）
+
+- 用户希望通过 GitHub Actions 使用 iOS 16 iPhone 模拟器测试，并接受 iOS 16.4 作为接近 iOS 16.3 的测试版本。
+- 上一次 GitHub simulator 启动检查实际使用 Xcode 16.4、iOS 18.5 runtime；`macos-15` 镜像的预装 runtime 清单没有 iOS 16。需要显式下载并选择 iOS 16.4，不能只设置 iOS 16 deployment target。
+- GitHub 托管 `macos-14` runner 已于 2026-11-02 退役，无法再用该 runner 标签固定回旧版 Xcode。
+- GitHub Actions `macos-15` 镜像没有预装 iOS 16 runtime。runner-images 公告说明缺少的受支持 runtime 可在 job 中通过 `xcodebuild -downloadPlatform iOS -buildVersion <版本>` 安装；这证明了安装方式，但尚未证明当前 Xcode 能下载 iOS 16.4，需在 workflow 里实测。Xcode 16.4 的系统要求支持 iOS 15 及更新系统的 Simulator runtime，因此计划尝试 iOS 16.4。
+- Apple 的公开 Xcode 发布映射从 Xcode 14.2 的 iOS 16.2 跳到 Xcode 14.3 的 iOS 16.4；当前没有确认可用的 iOS 16.3 Simulator runtime。因此本计划以 iOS 16.4 为目标，不声称精确复现 iOS 16.3。
+- 模拟器适合检查应用能否在 iOS 16 系统启动以及采集启动崩溃日志；HealthKit 权限、真实健康数据、TrollStore 安装行为仍需真机或最终 IPA/设备日志验证。
+- 当前诊断 workflow 仍自动选择任意可用 iPhone runtime；变更设计见 `docs/superpowers/specs/2026-11-23-healthmi-ios16-simulator-test-design.md`，尚待用户审核后实施。
+
+### 资料来源
+
+- [GitHub Actions macOS 15 runner image 清单](https://github.com/actions/runner-images/blob/main/images/macos/macos-15-Readme.md)
+- [GitHub Actions macOS 14 runner 退役公告](https://github.com/actions/runner-images/issues/13518)
+- [GitHub Actions 旧 Simulator runtime 安装说明](https://github.com/actions/runner-images/issues/13570)
+- [Apple Xcode 系统要求](https://developer.apple.com/xcode/system-requirements/)
+- [Apple Xcode 发布说明](https://developer.apple.com/documentation/xcode-release-notes)
