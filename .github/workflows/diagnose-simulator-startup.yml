@@ -1,0 +1,170 @@
+name: Diagnose simulator startup
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  simulator-startup:
+    name: Build, install, and launch in iOS Simulator
+    runs-on: macos-15
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Show Xcode and available simulator devices
+        run: |
+          xcodebuild -version
+          xcrun simctl list devices available
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Select an available iPhone simulator
+        id: simulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          simulator_json="$(xcrun simctl list devices available -j)"
+          simulator_udid="$(python3 -c '
+          import json, sys
+          devices = [
+              device
+              for runtime_devices in json.load(sys.stdin)["devices"].values()
+              for device in runtime_devices
+              if device.get("isAvailable") and device["name"].startswith("iPhone")
+          ]
+          if not devices:
+              raise SystemExit("No available iPhone simulator was found")
+          devices.sort(key=lambda device: ("Pro" not in device["name"], device["name"]))
+          print(devices[0]["udid"])
+          ' <<< "$simulator_json")"
+          simulator_name="$(python3 -c '
+          import json, sys
+          udid = sys.argv[1]
+          for runtime_devices in json.load(sys.stdin)["devices"].values():
+              for device in runtime_devices:
+                  if device["udid"] == udid:
+                      print(device["name"])
+                      raise SystemExit(0)
+          raise SystemExit("Selected simulator disappeared from the device list")
+          ' "$simulator_udid" <<< "$simulator_json")"
+          echo "udid=$simulator_udid" >> "$GITHUB_OUTPUT"
+          echo "name=$simulator_name" >> "$GITHUB_OUTPUT"
+          echo "Selected simulator: $simulator_name ($simulator_udid)"
+
+      - name: Build simulator app
+        env:
+          SIMULATOR_UDID: ${{ steps.simulator.outputs.udid }}
+        run: |
+          set -euo pipefail
+          mkdir -p build/simulator-diagnostics
+          set +e
+          xcodebuild \
+            -project HealthMi.xcodeproj \
+            -scheme HealthMi \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+            -derivedDataPath build/SimulatorDerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build 2>&1 | tee build/simulator-diagnostics/build.log
+          build_status=${PIPESTATUS[0]}
+          set -e
+          exit "$build_status"
+
+      - name: Install, launch, and collect diagnostics
+        id: diagnose
+        continue-on-error: true
+        shell: bash
+        env:
+          SIMULATOR_UDID: ${{ steps.simulator.outputs.udid }}
+          SIMULATOR_NAME: ${{ steps.simulator.outputs.name }}
+        run: |
+          set -euo pipefail
+          diagnostic_dir="$GITHUB_WORKSPACE/build/simulator-diagnostics"
+          app_path="$GITHUB_WORKSPACE/build/SimulatorDerivedData/Build/Products/Debug-iphonesimulator/HealthMi.app"
+          mkdir -p "$diagnostic_dir/crash-reports"
+          test -d "$app_path"
+          bundle_id="$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$app_path/Info.plist")"
+
+          printf 'simulator=%s\nudid=%s\nbundle_id=%s\n' \
+            "$SIMULATOR_NAME" "$SIMULATOR_UDID" "$bundle_id" \
+            > "$diagnostic_dir/metadata.txt"
+
+          xcrun simctl boot "$SIMULATOR_UDID" 2>&1 | tee "$diagnostic_dir/boot.txt" || true
+          xcrun simctl bootstatus "$SIMULATOR_UDID" -b \
+            2>&1 | tee "$diagnostic_dir/bootstatus.txt"
+
+          set +e
+          xcrun simctl install "$SIMULATOR_UDID" "$app_path" \
+            2>&1 | tee "$diagnostic_dir/install.txt"
+          install_status=${PIPESTATUS[0]}
+          set -e
+          echo "install_exit_code=$install_status" >> "$diagnostic_dir/metadata.txt"
+
+          launch_status="$install_status"
+          if [ "$install_status" -eq 0 ]; then
+            set +e
+            xcrun simctl launch --terminate-running-process "$SIMULATOR_UDID" "$bundle_id" \
+              2>&1 | tee "$diagnostic_dir/launch.txt"
+            launch_status=${PIPESTATUS[0]}
+            set -e
+          else
+            echo 'Launch skipped because simulator install failed.' \
+              | tee "$diagnostic_dir/launch.txt"
+          fi
+          echo "launch_exit_code=$launch_status" >> "$diagnostic_dir/metadata.txt"
+
+          sleep 20
+          xcrun simctl spawn "$SIMULATOR_UDID" /bin/ps -A -o pid,comm,args \
+            > "$diagnostic_dir/processes.txt" 2>&1 || true
+          xcrun simctl spawn "$SIMULATOR_UDID" log show --last 5m --style compact \
+            --predicate 'process == "HealthMi" OR (process == "SpringBoard" AND eventMessage CONTAINS[c] "HealthMi")' \
+            > "$diagnostic_dir/unified-log.txt" 2>&1 || true
+          xcrun simctl io "$SIMULATOR_UDID" screenshot "$diagnostic_dir/simulator-screen.png" \
+            > "$diagnostic_dir/screenshot.txt" 2>&1 || true
+
+          host_crash_dir="$HOME/Library/Logs/DiagnosticReports"
+          simulator_crash_dir="$HOME/Library/Developer/CoreSimulator/Devices/$SIMULATOR_UDID/data/Library/Logs/CrashReporter"
+          for crash_dir in "$host_crash_dir" "$simulator_crash_dir"; do
+            if [ -d "$crash_dir" ]; then
+              find "$crash_dir" -maxdepth 2 -type f -iname '*HealthMi*' -mmin -15 \
+                -exec cp -p {} "$diagnostic_dir/crash-reports/" \; 2>/dev/null || true
+            fi
+          done
+
+          if grep -Fq "$bundle_id" "$diagnostic_dir/processes.txt" \
+            || grep -Fq 'HealthMi' "$diagnostic_dir/processes.txt"; then
+            echo 'app_process_after_20_seconds=present' >> "$diagnostic_dir/metadata.txt"
+          else
+            echo 'app_process_after_20_seconds=not_found' >> "$diagnostic_dir/metadata.txt"
+            if [ "$launch_status" -eq 0 ]; then
+              launch_status=1
+              echo 'The app process was not present after the launch wait.' \
+                | tee -a "$diagnostic_dir/launch.txt"
+            fi
+          fi
+
+          exit "$launch_status"
+
+      - name: Upload simulator diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: HealthMi-simulator-diagnostics
+          path: build/simulator-diagnostics
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Report simulator launch result
+        if: steps.diagnose.outcome == 'failure'
+        run: |
+          echo "::error::HealthMi failed to launch or remain running in the iOS Simulator. Download the HealthMi-simulator-diagnostics artifact."
