@@ -4,7 +4,7 @@
 
 ## 结论
 
-可以用 GitHub Actions 在 macOS runner 上构建 HealthMi，并把导出的 IPA 作为 Actions artifact 保存或下载。**仓库不必公开，私有仓库也能运行 Actions**（GitHub 标注的旧版按仓库计费方案可能受限）。公开仓库和私有仓库的 runner 用量计费规则不同；私有仓库受账号套餐包含额度及超额计费规则约束，开跑前应查看当前账户的 Actions 用量与预算。
+可以用 GitHub Actions 在 macOS runner 上构建 HealthMi，并把导出的 IPA 作为 Actions artifact 保存或下载。**仓库不必公开，私有仓库也能运行 Actions**（GitHub 标注的旧版按仓库计费方案可能受限）。公开仓库使用标准 GitHub-hosted runner 免费；私有仓库先使用账号套餐包含的 compute 用量，超额后按 runner 费率计费。按 2026-11-23 查到的标准 macOS（3/4 核）runner 费率为每分钟 0.062 美元，不足一分钟按整分钟计；具体额度与费用以 GitHub 当前计费页和账户方案为准。
 
 只把代码推到 GitHub 不会自动生成 IPA。仓库需要配置工作流（通常放在 `.github/workflows/`），让 macOS runner 执行 Xcode archive 和 export，再用 Actions artifact 上传导出的文件。
 
