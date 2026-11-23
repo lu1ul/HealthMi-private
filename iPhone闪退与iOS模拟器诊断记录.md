@@ -99,3 +99,16 @@ HealthKit 在模拟器中的可用性和真实设备不同；模拟器启动检�
 - [GitHub Actions 旧 Simulator runtime 安装说明](https://github.com/actions/runner-images/issues/13570)
 - [Apple Xcode 系统要求](https://developer.apple.com/xcode/system-requirements/)
 - [Apple Xcode 发布说明](https://developer.apple.com/documentation/xcode-release-notes)
+
+## iOS 16.4 启动闪退结果（2026-11-23）
+
+- GitHub Actions 运行：`45146100153`；Xcode 16.4；设备为 iPhone 14；runtime 为 `com.apple.CoreSimulator.SimRuntime.iOS-16-4`。构建、安装和 `simctl launch` 命令均返回成功，但等待 20 秒后 HealthMi 进程已退出。
+- 崩溃报告 `HealthMi-2026-11-23-092343.ips` 的终止命名空间为 `DYLD`，错误为 `Library missing`：系统找不到 `/System/Library/Frameworks/SwiftData.framework/SwiftData`。引用该库的是应用的 `HealthMi.debug.dylib`。这次没有读取或检查健康数据。
+- 根因：旧库迁移类型虽标记为 iOS 17+，其 SwiftData `import` 仍让应用产物在启动时强依赖 SwiftData。可用性检查能阻止 iOS 16 执行迁移代码，但不能避免 dyld 加载强链接框架。
+- 修复方案：对 SwiftData 禁用 Swift 自动链接，再通过 `-weak_framework SwiftData` 弱链接；保留 iOS 17+ 上的迁移实现。Apple 的 Xcode Build Settings Reference 说明 `SWIFT_SKIP_AUTOLINKING_FRAMEWORKS` 可指定跳过自动链接的 framework；Apple 的 Frameworks and Weak Linking 文档说明 `-weak_framework` 用于弱链接整个 framework。
+- 后续验证：在 iOS 16.4 重跑启动 workflow，确认启动后进程仍存活；再在较新的 runtime 启动一次，确认该框架可用时应用仍可正常启动。此结果只能证明模拟器源码产物的启动行为，尚不能取代用户最终 IPA 的真机验证。
+
+### 新增官方资料
+
+- [Apple Xcode Build Settings Reference：`SWIFT_SKIP_AUTOLINKING_FRAMEWORKS`](https://developer.apple.com/documentation/xcode/build-settings-reference)
+- [Apple Frameworks and Weak Linking](https://developer.apple.com/library/archive/documentation/MacOSX/Conceptual/BPFrameworks/Concepts/WeakLinking.html)
