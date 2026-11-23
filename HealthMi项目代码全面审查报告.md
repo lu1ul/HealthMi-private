@@ -1,7 +1,7 @@
 # HealthMi 项目代码全面审查与 HealthKit 权限故障定位
 
 > 审查日期：2026-11-23
-> 审查基线：本地 `main`，HEAD `05df495`（`docs: add comprehensive HealthMi code review`）
+> 源码审查基线：`82fef0f`（`fix: weak link SwiftData for iOS 16`；之后提交仅更新文档）。本轮追加审查时 HEAD 为 `d323580`。
 > 结论类型：静态代码审查 + 本地 IPA 包结构检查；本轮没有修改业务源码，没有运行构建或测试，也没有在 GitHub runner 上运行模拟器。
 
 ## 一、结论摘要
@@ -30,6 +30,8 @@ HealthKit 调用失败时，仪表盘按钮通过 `try?` 丢弃错误，所以�
 | TrollStore/iOS 16.3 | TrollStore 官方支持 iOS 16.3；官方说明 entitlement 需由 `ldid` 预签后由 TrollStore 保留 | 高 |
 
 **综合判断：**若用户安装的是本项目当前的未签名构建产物，首要问题在项目的构建/打包流程；TrollStore 能把应用安装并启动，只证明该安装流程能够运行该 App，不证明 HealthKit entitlement 已存在。当前也没有足够证据把故障归因于 TrollStore 的缺陷。
+
+**本轮新增的数据正确性结论：**除权限问题外，Swift 端还有一个独立的高优先级问题：每日活动解析会用 `calories` key 的总卡路里覆盖 `steps` key 中的活动卡路里，之后把结果写入 HealthKit 的 `activeEnergyBurned`。仓库内 Python 实现和测试把这两者分开处理，Swift 测试却断言总卡路里就是活动卡路里。该问题会造成 HealthKit 活动能量数据失真，但不能解释权限弹窗缺失。
 
 但“没有弹窗”本身不能证明 entitlement 缺失：Apple 说明，如果这组数据类型之前都已被用户处理过，后续 `requestAuthorization` 可以直接返回而不再显示表单。另一方面，Apple 也说明完成授权请求后，应用会出现在“健康”App 的“来源”页，即使用户拒绝所有权限。因而还要确认手机上检查的是“健康”App 的来源列表、当前安装包的 Bundle ID，以及实际安装二进制的签名 entitlement；仅凭 TrollStore 能安装和启动，无法证明这些权限配置正确。[Apple：`requestAuthorization`](https://developer.apple.com/documentation/healthkit/hkhealthstore/requestauthorization%28toshare%3Aread%3Acompletion%3A%29)
 
@@ -254,6 +256,48 @@ API 客户端识别 `code=70016`，但 `AppModel.isAuthError` 只识别登录阶
 
 **建议：**让解析结果能表达未知或无效状态；未知分期应跳过或保留原始编码并记录诊断，避免默认映射为浅睡。用已确认的小米编码样例覆盖所有支持的状态值。
 
+#### S15｜P1：总卡路里被写成 HealthKit 活动能量
+
+**位置：** `HealthMi/MiFitness/MiParser.swift:18, 26, 36, 40-54`；写入映射见 `HealthMi/Health/TypeMapper.swift:34-39`；对照 `tools/mi-fitness-mcp-cn/src/mi_fitness_mcp/adapters/mi_fitness_cloud.py:463-496` 和 `tools/mi-fitness-mcp-cn/tests/test_mi_fitness_cloud.py:40-76`。
+
+Swift 端先把 `steps` key 的 `calories` 累加到 `kcalFromSteps`，再把 `calories` key 返回的总量覆盖到同一字段，最终赋给 `MiDailyActivity.activeKcal`。`TypeMapper.dailyActivitySamples` 将其作为 `HKQuantityType(.activeEnergyBurned)` 写入健康数据。Python 实现则把 `steps` 中的 calories 保存为 `active_kcal`，把独立 `calories` key 认作包含基础代谢的 `total_kcal`，并由测试验证两者分别为 3 和 12。Swift 的现有测试使用 100+50 与 210，并断言 `activeKcal == 210`，与 Python 端的已测试语义相反。
+
+**影响：**如果这两个 API key 的字段语义与仓库 Python 实现及测试一致，App 会把每日总消耗而非活动消耗写入 Apple 健康的活动能量，通常会显著高估活动热量。现有 Swift 测试会让该错误持续通过。
+
+**建议：**活动能量只从 `steps` 数据的活动 calories 计算；若产品需要总消耗，应在模型中单独保留，不映射到 `activeEnergyBurned`。先用脱敏的真实 API 响应或稳定样例确认字段语义，再修正 Swift 与 Python 的共同夹具和测试期望。此问题是代码/数据映射问题，不是 TrollStore 权限弹窗问题。
+
+#### S16｜P2：Swift App 与 Python 工具的睡眠阶段编码不一致
+
+**位置：** `HealthMi/MiFitness/MiParser.swift:113-123`；`tools/mi-fitness-mcp-cn/src/mi_fitness_mcp/adapters/mi_fitness_cloud.py:418-429`；Swift 测试见 `HealthMiTests/MiParserTests.swift:38-64`。
+
+Swift App 映射为 `2=deep, 3=light, 4=REM, 5=awake`；Python MCP 工具映射为 `1=deep, 2/3=light, 4=awake, 5=REM`。Swift 源码注释称其映射已按实际数据修正，Python 映射为旧版本，但仓库没有保留可复核的原始响应夹具或协议文档来独立判定哪套映射符合小米当前协议。Swift 测试只覆盖 `2/4/5`，没有覆盖 `3`、未知编码或与 Python 共享的样例；Python 测试也未覆盖该映射。
+
+**影响：**两个工具面对相同睡眠记录会输出不同阶段；若旧 Python 映射仍被下游使用，REM、深睡和清醒时长会错分。该差异不影响 HealthKit 授权弹窗，也不能仅凭代码断言 Swift 当前映射错误。
+
+**建议：**保存脱敏的真实云端睡眠记录作为黄金夹具，明确每个 state 的协议语义，并让 Swift 与 Python 共用同一组预期映射。未知值应保留为未知或跳过，不能默认伪装成浅睡（参见 S14）。
+
+#### S17｜P2：睡眠总时长的区间边界与按日归属未定义
+
+**位置：** `HealthMi/Health/HealthKitReader.swift:27-44, 50-84, 126-145, 168-182`。
+
+`summary(days:)` 从当前时刻向前回退日历天数，并把查询返回的每个睡眠样本完整时长相加；当前 `predicateForSamples` 调用没有启用 `strictStartDate` / `strictEndDate`，因此与所选区间相交的样本也会返回，跨越起始边界的样本会把区间外时长一并计入总量。趋势查询则把每段睡眠的完整分钟数归到 `sample.startDate` 所在日，没有按午夜切分；例如跨午夜的一段睡眠会全部落在开始日。是否应按“入睡夜晚”归属需要产品定义，但当前数据不能解释为严格的日历日睡眠分钟数。查询还会直接相加所有来源的睡眠样本，没有检查来源或重叠区间；若不同来源记录了重叠睡眠，也会重复累计。
+
+**影响：**最近 N 天摘要可能包含边界之外的睡眠；趋势图可能把整晚显示在入睡日；多来源重叠记录可能高估睡眠时长。实际误差取决于设备样本的时间范围和来源。
+
+**建议：**明确采用日历日切分还是睡眠夜归属；对查询区间边界裁剪样本时长，并按选定策略处理跨午夜区间。多来源样本需要有明确的来源优先级或重叠去重规则。Apple 将 `strictStartDate` / `strictEndDate` 定义为要求样本起止时间落在目标区间内的选项；当前调用未传这些严格选项，因此应按可能跨界返回的样本处理。
+
+#### S18｜P2：快捷指令/后台任务取消与完成路径没有统一收敛
+
+**位置：** `HealthMi/App/SyncIntent.swift:20-34`；`HealthMi/Sync/BackgroundSync.swift:25-37`；`HealthMi/App/AppModel.swift:209-212, 270-278`；重试等待见 `HealthMi/MiFitness/MiAPIClient.swift:105-127, 218-251`。
+
+快捷指令创建了独立 `Task` 执行 `syncAll`，只由 55 秒 watchdog 主动取消；代码没有把 `perform()` 调用方的取消显式传递给该任务。`syncAll` 检查到取消后只 `break` 数据类型循环，随后仍更新状态、刷新 HealthKit 摘要并可能发送通知。API 重试和分页等待用 `try? Task.sleep`，取消产生的错误被吞掉：重试等待取消后仍可能尝试下一次请求，分页等待取消后会直接进入下一页。
+
+后台刷新有两个完成入口：`expirationHandler` 异步安排取消并立即调用 `setTaskCompleted(false)`；同步任务正常返回后也调用 `setTaskCompleted(success:)`。两条路径没有共享的一次性完成门闩；若过期与同步结束并发，存在重复报告完成的竞态。取消分支在 `guard !Task.isCancelled else { return }` 处提前返回，也不会清空静态 `syncTask` 引用。
+
+**影响：**系统已过期或快捷指令调用方已取消后，仍可能继续做重试等待和 HealthKit 读取；后台任务可能出现重复完成报告或保留过期任务引用。此问题不解释授权表单/来源列表缺失。
+
+**建议：**让取消沿结构化任务传播；重试等待遇到取消立即抛出，循环每个请求边界都检查取消；`syncAll` 取消后尽早返回，不再运行摘要查询；后台任务用单一完成状态协调过期与正常完成，并通过 `defer` 清除任务引用。用“取消与同步完成同时发生”的测试验证完成回调只走一次。
+
 ### C. 仓库内 Python MCP/CLI 参考工具
 
 此目录是独立的 Python 小米运动健康同步/MCP 工具，不是 iOS App HealthKit 弹窗的直接调用链；以下问题不会解释 iPhone 上权限列表没有 HealthMi。
@@ -375,6 +419,8 @@ plutil -p /tmp/healthmi-check/Payload/HealthMi.app/Info.plist
 - 本次没有运行 GitHub runner；现有静态证据和本地 IPA 包结构足以定位当前最可能的构建配置问题，无需为此公开仓库。
 - 本次没有修改项目源码、没有改变 GitHub 仓库公开性、没有 push。
 - 本次补充审查开始时，`main` 相对 `personal/main` 领先 3 个本地提交；已存在的未跟踪文件 `项目分析-优先关注问题.md` 保持原样。
+- 2026-11-23 继续静态审查代码基线 `82fef0f`，补充核对 Swift/Python 卡路里与睡眠分期差异、HealthKit 睡眠区间统计、快捷指令取消和后台任务完成竞态；本轮另有独立只读复核确认，本地 unsigned IPA 主可执行文件没有 `LC_CODE_SIGNATURE`。这仍不能证明用户手机上的最终安装包经过后处理后缺少 entitlement。
+- 本轮没有运行构建、测试或 GitHub runner；没有修改业务代码，未改变仓库可见性，未 push。`项目分析-优先关注问题.md` 未跟踪文件保持未暂存、未修改。
 
 ## 八、参考资料
 
@@ -383,4 +429,7 @@ plutil -p /tmp/healthmi-check/Payload/HealthMi.app/Info.plist
 - Apple：[HKHealthStore requestAuthorization API](https://developer.apple.com/documentation/healthkit/hkhealthstore/requestauthorization(toshare:read:completion:))——请求 HealthKit 访问授权的 API。
 - Apple：[HKHealthStore getRequestStatusForAuthorization API](https://developer.apple.com/documentation/healthkit/hkhealthstore/getrequeststatusforauthorization(toshare:completion:))——检查针对指定数据类型的授权请求当前是否需要系统展示表单；授权调用成功本身不能证明用户已授予所有读写权限。
 - Apple：[HKHealthStore authorizationStatus API](https://developer.apple.com/documentation/healthkit/hkhealthstore/authorizationstatus(for:))——查询指定对象类型的共享/写入授权状态。
+- Apple：[HKQuery `predicateForSamples`](https://developer.apple.com/documentation/healthkit/hkquery/predicateforsamples(withstart:end:options:))——样本查询的时间范围可按样本与区间相交来匹配，计算边界区间总时长时需明确裁剪策略。
+- Apple：[HKQueryOptions](https://developer.apple.com/documentation/healthkit/hkqueryoptions)——`strictStartDate` 与 `strictEndDate` 分别要求样本起始/结束时间落在目标区间内。
+- Apple：[BGTask `expirationHandler`](https://developer.apple.com/documentation/backgroundtasks/bgtask/expirationhandler) 与 [`setTaskCompleted(success:)`](https://developer.apple.com/documentation/backgroundtasks/bgtask/settaskcompleted(success:))——后台任务到期处理和完成状态的官方接口。
 - TrollStore：[官方 README](https://github.com/opa334/TrollStore/blob/main/README.md)——用于核对其支持范围和 entitlement 处理方式；TrollStore 可处理带任意 entitlement 的应用，但安装成功本身并不证明 HealthKit entitlement 存在。
