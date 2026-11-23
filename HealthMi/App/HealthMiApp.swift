@@ -57,7 +57,9 @@ final class AppDatabase {
             }
         }
 
-        container.viewContext.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
+        container.viewContext.mergePolicy = NSMergePolicy(
+            merge: .mergeByPropertyObjectTrumpMergePolicyType
+        )
         container.viewContext.automaticallyMergesChangesFromParent = true
 
         if #available(iOS 17.0, *) {

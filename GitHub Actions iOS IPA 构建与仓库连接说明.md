@@ -144,7 +144,9 @@ GitHub 的套餐、额度和 runner 名称可能调整，实际执行前以 GitH
 - 已更新 README 的构建说明，指出 IPA 尚未签名、需要配置 HealthKit 能力并由用户后续签名。
 - 首次 Actions 运行已完成工程生成，但构建脚本在 Bash 3.2 下因空数组与 `set -u` 一起使用而退出，尚未运行 `xcodebuild`；第二次运行修正了空数组问题后，发现 XcodeGen 工程需要通过 `HealthMi` scheme 与 `generic/platform=iOS` destination 构建，已相应调整。
 - 静态核对：确认工作流只申请 `contents: read` 权限，不读取证书或 profile；`git diff --check` 通过。当前 Windows 环境没有 Xcode，实际构建留待 macOS runner 重试；未运行 XCTest。
-- 当前实施状态：私有仓库创建、推送、GitHub Actions 构建和 artifact 下载结果待更新。
+- 对照账号中已有的公开 `lu1ul/HealthMi`：其成功运行使用 `xcodebuild -project ... -scheme HealthMi -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath ... CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY='' build`，再把 `.app` 复制进 `Payload/` 并 zip。私有工作流已采用相同构建参数和打包目录；旧版 iOS 17 源码的成功运行不能覆盖新 Core Data/Swift 6 源码的编译结果。
+- 第三次 Actions 已完成工程生成并启动 Swift 编译，报错定位到 `HealthMi/App/HealthMiApp.swift:60`：全局变量 `NSMergeByPropertyObjectTrumpMergePolicy` 被 Swift 6 strict concurrency 检查判为共享可变状态。将改为使用 `NSMergePolicy(merge: .mergeByPropertyObjectTrumpMergePolicyType)`，保持相同的对象属性优先合并语义。
+- 当前实施状态：私有仓库创建和 `main` 推送已完成；源代码修复及最终成功构建、artifact 下载待完成。
 
 ### 官方资料补充
 
@@ -154,3 +156,5 @@ GitHub 的套餐、额度和 runner 名称可能调整，实际执行前以 GitH
 - [`actions/upload-artifact` releases](https://github.com/actions/upload-artifact/releases)：artifact 上传 Action 的版本记录。
 - [Apple：Export an iOS, tvOS, or watchOS app](https://help.apple.com/xcode/mac/current/en.lproj/dev23ea8b877.html)：Xcode archive 的标准签名导出流程。
 - [Apple：What is app signing?](https://help.apple.com/xcode/mac/current/en.lproj/dev3a05256b8.html)：代码签名、App ID 和 provisioning profile 的作用。
+- [Apple：NSMergePolicy](https://developer.apple.com/documentation/coredata/nsmergepolicy)：用 `init(merge:)` 从 `NSMergePolicyType` 创建合并策略对象。
+- [Apple：object trump 合并策略](https://developer.apple.com/documentation/coredata/nsmergepolicytype/mergebypropertyobjecttrumpmergepolicytype)：对象内存属性优先于持久化状态的冲突处理语义。
