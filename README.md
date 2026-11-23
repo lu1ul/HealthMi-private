@@ -92,6 +92,10 @@ xcodebuild -project HealthMi.xcodeproj -scheme HealthMi \
   DEVELOPMENT_TEAM=<团队ID> -allowProvisioningUpdates build
 ```
 
+### GitHub Actions 无签名 IPA
+
+向 `main` 推送 App 源码或工程配置后，工作流会在 macOS runner 上生成 `HealthMi-unsigned.ipa`；也可以从 GitHub Actions 手动运行 `Build unsigned IPA`。下载名为 `HealthMi-unsigned-ipa` 的 artifact 即可取得文件。构建不会使用 Apple 证书或 provisioning profile，因此 IPA 不能直接安装；请用自己的开发团队签名，并确保 App ID/profile 启用了 HealthKit。若需使用团队已注册的其他 Bundle Identifier，手动运行时填写 `bundle_identifier`。
+
 ## 使用
 
 1. 首次打开 App，通过 WebView 登录小米账号，或手动输入 `userId` / `passToken`；

@@ -1,0 +1,87 @@
+name: Build unsigned IPA
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/build-unsigned-ipa.yml'
+      - 'HealthMi/**'
+      - 'HealthMi.xcodeproj/**'
+      - 'project.yml'
+  workflow_dispatch:
+    inputs:
+      bundle_identifier:
+        description: 'Optional Bundle Identifier registered to your Apple Developer team'
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build device IPA without signing
+    runs-on: macos-15
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Build unsigned iOS app
+        env:
+          BUNDLE_IDENTIFIER: ${{ github.event.inputs.bundle_identifier || '' }}
+        run: |
+          set -euo pipefail
+
+          build_settings=()
+          if [[ -n "$BUNDLE_IDENTIFIER" ]]; then
+            build_settings+=("PRODUCT_BUNDLE_IDENTIFIER=$BUNDLE_IDENTIFIER")
+          fi
+
+          xcodebuild \
+            -project HealthMi.xcodeproj \
+            -target HealthMi \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build/DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY='' \
+            "${build_settings[@]}" \
+            build
+
+      - name: Package unsigned IPA
+        run: |
+          set -euo pipefail
+
+          app_path="$GITHUB_WORKSPACE/build/DerivedData/Build/Products/Release-iphoneos/HealthMi.app"
+          package_root="$GITHUB_WORKSPACE/build/ipa-package"
+          ipa_path="$GITHUB_WORKSPACE/build/HealthMi-unsigned.ipa"
+
+          test -d "$app_path"
+          test ! -e "$app_path/_CodeSignature"
+          mkdir -p "$package_root/Payload"
+          ditto "$app_path" "$package_root/Payload/HealthMi.app"
+          ditto -c -k --sequesterRsrc --keepParent "$package_root/Payload" "$ipa_path"
+
+          /usr/bin/unzip -Z1 "$ipa_path" | grep -q '^Payload/HealthMi.app/Info.plist$'
+          shasum -a 256 "$ipa_path"
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: HealthMi-unsigned-ipa
+          path: build/HealthMi-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 7
