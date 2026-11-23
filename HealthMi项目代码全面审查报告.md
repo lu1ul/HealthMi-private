@@ -1,7 +1,7 @@
 # HealthMi 项目代码全面审查与 HealthKit 权限故障定位
 
 > 审查日期：2026-11-23
-> 审查基线：本地 `main`，HEAD `a201776`（`docs: record repaired iOS 16 IPA build`）
+> 审查基线：本地 `main`，HEAD `05df495`（`docs: add comprehensive HealthMi code review`）
 > 结论类型：静态代码审查 + 本地 IPA 包结构检查；本轮没有修改业务源码，没有运行构建或测试，也没有在 GitHub runner 上运行模拟器。
 
 ## 一、结论摘要
@@ -21,12 +21,17 @@ HealthKit 调用失败时，仪表盘按钮通过 `try?` 丢弃错误，所以�
 | 环节 | 判断 | 证据强度 |
 |---|---|---|
 | HealthKit 请求源码 | 调用了授权 API，权限类型和用途说明基本齐全 | 高 |
+| iOS 16.3 API 可用性 | `requestAuthorization` 早于 iOS 16 已提供；没有发现最低版本导致该调用不可用 | 高 |
 | 本仓库 IPA 工作流 | 关闭代码签名，工作流产物不承载工程声明的 HealthKit entitlement | 高 |
 | HealthKit 按钮表现 | `try?` 隐藏失败，可能呈现为“点了没反应” | 高 |
+| 重复请求不弹窗 | 所有目标类型此前已授权或拒绝时，系统可不再显示表单 | 高 |
+| 授权来源列表 | 完成授权请求后，即使拒绝，应用也应出现在“健康”App 的“来源”页 | 高 |
 | 用户最终安装包 | 尚未取得，无法验证是否被重签或补入 entitlement | 未知 |
-| TrollStore/iOS 16.3 | 官方支持范围包含 iOS 16.3；当前没有证据表明 TrollStore 安装器整体失常 | 中等 |
+| TrollStore/iOS 16.3 | TrollStore 官方支持 iOS 16.3；官方说明 entitlement 需由 `ldid` 预签后由 TrollStore 保留 | 高 |
 
 **综合判断：**若用户安装的是本项目当前的未签名构建产物，首要问题在项目的构建/打包流程；TrollStore 能把应用安装并启动，只证明该安装流程能够运行该 App，不证明 HealthKit entitlement 已存在。当前也没有足够证据把故障归因于 TrollStore 的缺陷。
+
+但“没有弹窗”本身不能证明 entitlement 缺失：Apple 说明，如果这组数据类型之前都已被用户处理过，后续 `requestAuthorization` 可以直接返回而不再显示表单。另一方面，Apple 也说明完成授权请求后，应用会出现在“健康”App 的“来源”页，即使用户拒绝所有权限。因而还要确认手机上检查的是“健康”App 的来源列表、当前安装包的 Bundle ID，以及实际安装二进制的签名 entitlement；仅凭 TrollStore 能安装和启动，无法证明这些权限配置正确。[Apple：`requestAuthorization`](https://developer.apple.com/documentation/healthkit/hkhealthstore/requestauthorization%28toshare%3Aread%3Acompletion%3A%29)
 
 ## 二、HealthKit 权限按钮的实际调用链
 
@@ -43,7 +48,7 @@ HealthKit 调用失败时，仪表盘按钮通过 `try?` 丢弃错误，所以�
 - [Info.plist](HealthMi/Support/Info.plist) 同时包含 `NSHealthShareUsageDescription` 与 `NSHealthUpdateUsageDescription`。
 - `HealthKitManager` 的调用使用 HealthKit 提供的授权请求 API；没有发现遗漏“点击后才请求”的明显源码错误。
 
-这些配置说明源码作者意图正确，但不能证明某个 IPA 的签名 entitlement 已正确生成。
+这些配置说明源码作者意图正确，但不能证明某个 IPA 的签名 entitlement 已正确生成。`HealthKitManager.requestAuthorization()` 的注释写着“系统会展示授权弹窗”，这个说法不适用于已对所请求类型做过决定的重复请求；此时系统可以不展示表单。代码没有调用 `getRequestStatusForAuthorization` 来观察系统是否预期显示表单，也没有把按钮调用结果呈现给用户。[Apple：`requestAuthorization`](https://developer.apple.com/documentation/healthkit/hkhealthstore/requestauthorization%28toshare%3Aread%3Acompletion%3A%29)
 
 ## 三、IPA 与构建工作流证据
 
@@ -68,7 +73,9 @@ HealthKit 调用失败时，仪表盘按钮通过 `try?` 丢弃错误，所以�
 
 ZIP 清单能看到 `Payload/HealthMi.app/HealthMi` 与 `Info.plist`，没有 `_CodeSignature`、`embedded.mobileprovision` 或独立 `.entitlements` 文件；同时，工作流源码确认关闭了代码签名。第一份正是先前记录、用于 iOS 16 修复后生成的候选 IPA。
 
-**重要边界：**TrollStore 可能会为应用执行自己的安装签署处理，所以“未签名 IPA 无签名”不能单独证明安装后的二进制状态。但它不能从本项目仓库里的 `project.yml` 推断 HealthKit entitlement；需要确认安装器处理前，可执行文件里是否已经携带了这个自定义 entitlement。TrollStore 官方 README 描述的流程也是先给二进制写入/伪签所需 entitlement，再由 TrollStore 安装时保留这些 entitlement。
+**重要边界：**TrollStore 支持安装带任意 entitlement 的应用，因此“可以安装并启动”不等于“安装后一定有 HealthKit entitlement”，也不能单独证明安装器有问题。需要核对实际安装的 IPA/应用主程序中是否存在 `com.apple.developer.healthkit = true`。当前没有用户安装用的最终 IPA，也没有设备侧 entitlement 清单；所以根因判断是“更可能是构建包问题”，不是对设备/TrollStore 的最终定责。[TrollStore 官方项目说明](https://github.com/opa334/TrollStore/blob/main/README.md)
+
+TrollStore 官方说明的 entitlement 使用流程要求先通过 `ldid` 将自定义 entitlement 伪签进应用主程序，再由 TrollStore 安装并保留。仓库的 IPA 工作流没有运行 `ldid`，也没有执行 Xcode 代码签名；因此如果安装包未经其它处理直接交给 TrollStore，这条构建链路没有为 HealthKit 准备 entitlement。[TrollStore 官方 README](https://github.com/opa334/TrollStore/blob/main/README.md)
 
 ## 四、最能解释当前症状的因果链
 
@@ -98,12 +105,12 @@ DashboardView 的 try? 吞掉错误
 
 **位置：** `.github/workflows/build-unsigned-ipa.yml:47-70`、`project.yml:42-46`、`HealthMi/Support/HealthMi.entitlements:4-6`
 
-这是当前权限故障最可能的根因。XcodeGen 配置有 entitlement，但唯一设备 IPA 工作流明确关闭签名。该工作流生成的 IPA 不能被视为已带 HealthKit entitlement 的可安装包。
+这是当前权限故障最可能的根因。XcodeGen 配置有 entitlement，但唯一设备 IPA 工作流明确关闭签名。工作流产物不能被视为已把 HealthKit entitlement 写入主程序签名的可安装包；工程中的 `.entitlements` 只是构建输入，不能单凭文件存在推断最终可执行文件的签名包含它。Apple 将 `com.apple.developer.healthkit` 定义为应用可请求健康数据访问的 entitlement。[Apple：HealthKit entitlement](https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.developer.healthkit)
 
 **建议：**分清两种目标包并各自验证：
 
 - Apple 开发者签名包：使用启用了 HealthKit capability 的 App ID 与匹配的 profile/code signing，检查最终签名 entitlement。
-- TrollStore 包：打包前将所需 entitlement 写入主程序的 entitlement 签名数据；之后安装并再次核对安装所用 IPA/可执行文件。不要只检查 `.entitlements` 源文件。
+- TrollStore 包：按官方说明先用 `ldid` 将所需 entitlement 伪签进主程序，再由 TrollStore 安装；安装后再次核对最终 entitlement。不要只检查 XcodeGen 的 `.entitlements` 源文件。
 
 #### H2｜P1：仪表盘静默吞掉授权请求错误
 
@@ -112,6 +119,8 @@ DashboardView 的 try? 吞掉错误
 用户点按钮后确实启动异步请求，但 `try?` 将 API 错误直接丢弃。这会把“按钮未工作”“entitlement 缺失”“HealthKit 错误”等不同状态都表现成无响应。
 
 **建议：**由 `AppModel` 保存明确的权限请求状态/错误，界面展示可读原因和重试入口；保留系统是否展示授权 UI 作为实际验证点。同步里的错误捕获不能替代这个按钮自身的错误反馈。
+
+**重复请求行为：**Apple 文档说明，若用户此前已对请求中的全部类型作出决定，系统可以不再显示授权表单；完成过授权请求后，应用仍会列在“健康”App 的“来源”页，即使用户拒绝所有权限。因此必须区分“此前已处理、系统正常不再弹窗”和“当前请求没有成功到达 HealthKit”。当前代码没有调用 `getRequestStatusForAuthorization`，而 `try?` 又隐藏调用错误。排查时应在“健康”App 的“来源”页确认当前应用，并核对实际 Bundle ID 与正在检查的构建一致。[Apple：授权请求行为](https://developer.apple.com/documentation/healthkit/hkhealthstore/requestauthorization%28toshare%3Aread%3Acompletion%3A%29)；[Apple：请求状态 API](https://developer.apple.com/documentation/healthkit/hkhealthstore/getrequeststatusforauthorization%28toshare%3Acompletion%3A%29)
 
 #### H3｜P2：授权状态指示器只检查步数写入权限
 
@@ -213,6 +222,38 @@ API 客户端识别 `code=70016`，但 `AppModel.isAuthError` 只识别登录阶
 
 **建议：**区分“键不存在”与“键存在但数组为空”。
 
+#### S11｜P1：强制回填先删除旧 HealthKit 样本，后写入失败会造成数据缺口
+
+**位置：** `HealthMi/Sync/SyncEngine.swift:90-107, 233-249`
+
+`forceBackfill` 对普通健康样本先按 external UUID 删除 HealthKit 中范围内的旧记录，再调用 `writer.save` 写入新记录。删除成功但新样本保存失败时，旧记录已丢失，本次同步会报错且游标不会前进。运动回填同样先删除旧 workout 和关联心率，再调用 `saveWorkout`。删除和保存不是本项目可包成单个事务的操作，因此当前顺序存在可见的数据丢失窗口。
+
+**建议：**为回填设计可恢复的两阶段替换：先确认完整的新数据和可写入状态，再替换旧样本；若 HealthKit 接口要求先删后写，需保留足以恢复旧样本的内容或记录补偿任务。重点覆盖“删除成功、保存失败”和 workout 已保存但关联心率写入失败。
+
+#### S12｜P2：强制回填不会清理上游已消失的数据
+
+**位置：** `HealthMi/Sync/SyncEngine.swift:88-118, 228-253`
+
+普通类型只在 `fetchAndMap` 返回的 `groups` 上执行回填删除。如果指定类型本次返回空集合，循环体不执行，HealthKit 中不再出现在小米响应里的旧记录仍会保留。运动回填也只对新响应里仍存在的 `draft` 删除和重写旧 workout，不会清理范围内已从云端消失的 workout。因此“全量重拉并重写”在空响应或已删除记录场景下实际只会重写当前仍返回的记录。
+
+**建议：**先确认 API 响应完整、分页结束且解析成功，再根据新旧 external UUID 集合差异做范围清理；协议错误或分页不完整时保留旧样本。
+
+#### S13｜P2：全局同步被步数写入权限统一拦截
+
+**位置：** `HealthMi/App/AppModel.swift:124-138, 184-194`
+
+`healthKitAuthorized` 只表示 `stepCount` 的 HealthKit 写入状态。`syncAll` 在同步任何数据类型前都要求它为 `true`，否则直接返回。用户即使只启用其它可写类型，也会因步数被拒绝而被全局阻止；压力数据本身存 Core Data、不写 HealthKit，却同样无法同步。
+
+**建议：**按启用的数据类型分别处理 HealthKit 写入失败；HealthKit 之外的数据（至少压力）不应依赖步数授权。界面状态应拆分为授权请求状态、步数写入状态和各类型的实际写入结果，避免一个状态代表所有权限。
+
+#### S14｜P2：未识别的睡眠阶段被默认伪装成浅睡
+
+**位置：** `HealthMi/MiFitness/MiParser.swift:113-123`
+
+当前只明确映射 state `2` 至 `5`，其余值（包括缺失或未来新增编码）全部返回 `.light`，再由 `TypeMapper` 写成 HealthKit `asleepCore`。这会把未知或异常记录伪造成有效浅睡样本，影响睡眠分期与统计。
+
+**建议：**让解析结果能表达未知或无效状态；未知分期应跳过或保留原始编码并记录诊断，避免默认映射为浅睡。用已确认的小米编码样例覆盖所有支持的状态值。
+
 ### C. 仓库内 Python MCP/CLI 参考工具
 
 此目录是独立的 Python 小米运动健康同步/MCP 工具，不是 iOS App HealthKit 弹窗的直接调用链；以下问题不会解释 iPhone 上权限列表没有 HealthMi。
@@ -265,15 +306,21 @@ API 客户端识别 `code=70016`，但 `AppModel.isAuthError` 只识别登录阶
 
 ### D. 既有问题记录的时效性
 
-仓库中未跟踪的 `项目分析-优先关注问题.md` 标记分析基线为 `5930b70`，早于当前 `a201776`。其中“压力部分回填会清空全部历史”“压力保存失败吞错”等条目在当前代码已处理：`SyncEngine.syncStress` 返回实际查询范围，`StressStore.replaceRange` 只替换该范围，Core Data 保存错误会向上抛出。旧文档适合作为历史记录，不能直接当作当前结论。
+仓库中未跟踪的 `项目分析-优先关注问题.md` 标记分析基线为 `5930b70`，早于当前审查基线 `05df495`。其中“压力部分回填会清空全部历史”“压力保存失败吞错”等条目在当前代码已处理：`SyncEngine.syncStress` 返回实际查询范围，`StressStore.replaceRange` 只替换该范围，Core Data 保存错误会向上抛出。旧文档适合作为历史记录，不能直接当作当前结论。
 
 当前工作区有此未跟踪文件，本次没有修改、暂存或提交它。
+
+### E. iOS 17 SwiftData 到 Core Data 迁移核对
+
+从历史提交 `565cd71^` 读取到的 iOS 17 版本使用 `Schema([SyncState.self, StressRecord.self, SyncLogEntry.self])` 与默认 `ModelConfiguration(schema:)` 打开 SwiftData；当前 `LegacySwiftDataImporter.importIfNeeded` 使用相同模型集合和同一默认配置。模型字段、SwiftData unique 属性也与当前迁移器读取的 v1 schema 对应。因此静态代码未发现“新旧版本使用了不同默认 SwiftData store 配置”的明显错误。
+
+当前单元测试通过内存 SwiftData 容器调用 `importRecords` 验证记录字段、幂等标记和旧库保留，但没有用**历史版本实际落盘的默认 SwiftData store**执行启动升级测试。这个仍是验证缺口，不能仅凭内存导入测试断言真实升级路径已在 iOS 17 用户数据上成功。
 
 ## 六、修复与验证建议
 
 ### 第一优先级：确认最终安装包的 entitlement
 
-最省力的定责材料是**你实际交给 TrollStore 安装的那一个 IPA**，而不是 Xcode 工程文件或当前 unsigned IPA。可以提供该 IPA；不要提供证书私钥、密码或开发者账号凭据。也可以在有 macOS/Xcode 的环境对主程序执行：
+最省力的定责材料是**你实际交给 TrollStore 安装的那一个 IPA**，而不是 Xcode 工程文件或当前 unsigned IPA。也可以在有 macOS/Xcode 的环境对主程序执行：
 
 ```sh
 unzip -q HealthMi-installed.ipa -d /tmp/healthmi-check
@@ -288,6 +335,8 @@ plutil -p /tmp/healthmi-check/Payload/HealthMi.app/Info.plist
 - 包内 `Info.plist` 是否仍含 `NSHealthShareUsageDescription` 和 `NSHealthUpdateUsageDescription`。
 - 最终 Bundle ID 是否是 `com.healthmi.HealthMi`，并与实际安装的 App 一致。
 - 查验的 IPA 是否就是手机当前安装的那一份，避免检查错构建版本。
+- 在 iPhone 的“健康”App →“来源”中确认 HealthMi 是否出现；系统若以前已对全部类型作过选择，重复调用可能不弹窗，但完成过请求后应用仍应列在来源页。
+- 记录授权请求状态 API 的结果及 `requestAuthorization` 的错误，不要只凭按钮无弹窗判断请求未执行。
 
 若该 IPA entitlement 缺失，问题已锁定在构建/签名/安装包处理流程；若 entitlement 存在，再收集 iPhone 上的 HealthKit/HealthMi 统一日志和安装包来源，排查 bundle/签名状态或 TrollStore 对这份包的具体处理。
 
@@ -295,7 +344,7 @@ plutil -p /tmp/healthmi-check/Payload/HealthMi.app/Info.plist
 
 1. 选择本次分发目标：Apple 开发者签名包或 TrollStore 包。
 2. Apple 开发者签名包需确保 App ID、profile 和签名中的 HealthKit capability 配套。
-3. TrollStore 包需先让主可执行文件携带 HealthKit entitlement，再打包安装；安装后再次检查实际 entitlement。
+3. TrollStore 包需按其安装流程准备主可执行文件的 HealthKit entitlement，并在安装后再次检查实际 entitlement；不能假设它会从 XcodeGen 的 `.entitlements` 源文件推断权限。
 4. 修改 workflow 的 artifact 命名，明确区分 `unsigned` 与 `trollstore/healthkit-enabled`，避免把“可以安装”误解成“具备 HealthKit entitlement”。
 
 ### 第三优先级：给授权请求加可见错误
@@ -312,7 +361,8 @@ plutil -p /tmp/healthmi-check/Payload/HealthMi.app/Info.plist
 | IPA 主程序 entitlement | `com.apple.developer.healthkit = true` |
 | Info.plist 用途说明 | Share 与 Update 两个 key 都存在且非空 |
 | iOS 16.3 真机点击授权 | 能观察到请求状态；发生错误时 App 显示具体错误 |
-| 系统健康数据访问页 | HealthMi 出现，并可查看相应写入类型；读取授权需用数据行为验证 |
+| “健康”App 的来源列表 | HealthMi 出现；即使用户拒绝所有类型，完成授权请求后也应列出 |
+| 系统健康数据访问页 | 可查看相应写入类型；读取授权需用实际读取结果验证 |
 | 实际写入 | 一次受控同步后，在健康 App 的来源/数据中出现对应类型样本 |
 | GitHub 模拟器 | 可辅助验证启动/UI/API 调用链，但不能替代 TrollStore 签名验证或 iOS 16.3 真机 HealthKit 授权验证 |
 
@@ -322,13 +372,15 @@ plutil -p /tmp/healthmi-check/Payload/HealthMi.app/Info.plist
 - 检查了本地两个未签名 IPA 的 ZIP 目录和 SHA-256；没有本机 macOS `codesign` 环境，因此没有对最终签名二进制执行 Apple 签名验证。
 - 没有取得用户手机上最终安装的 IPA，也没有 iOS 16.3 设备日志/HealthKit 错误码。
 - 没有运行构建、测试、HealthKit 请求或外部小米 API 请求；本报告的非 entitlement 代码缺陷为静态风险，需要后续用针对性测试验证。
+- 本次没有运行 GitHub runner；现有静态证据和本地 IPA 包结构足以定位当前最可能的构建配置问题，无需为此公开仓库。
 - 本次没有修改项目源码、没有改变 GitHub 仓库公开性、没有 push。
-- Git 状态核对基线：`main` 相对 `personal/main` 领先 2 个本地提交；已存在的未跟踪文件 `项目分析-优先关注问题.md` 保持原样。
+- 本次补充审查开始时，`main` 相对 `personal/main` 领先 3 个本地提交；已存在的未跟踪文件 `项目分析-优先关注问题.md` 保持原样。
 
 ## 八、参考资料
 
 - Apple：[HealthKit entitlement](https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.developer.healthkit)——应用必须配置 HealthKit entitlement 才能使用相应 HealthKit 能力。
 - Apple：[Authorizing access to health data](https://developer.apple.com/documentation/healthkit/authorizing-access-to-health-data)——应用通过 HealthKit 授权 API 请求读写类型权限；读取授权状态受隐私保护，不能据此读取用户是否允许读取数据。
 - Apple：[HKHealthStore requestAuthorization API](https://developer.apple.com/documentation/healthkit/hkhealthstore/requestauthorization(toshare:read:completion:))——请求 HealthKit 访问授权的 API。
+- Apple：[HKHealthStore getRequestStatusForAuthorization API](https://developer.apple.com/documentation/healthkit/hkhealthstore/getrequeststatusforauthorization(toshare:completion:))——检查针对指定数据类型的授权请求当前是否需要系统展示表单；授权调用成功本身不能证明用户已授予所有读写权限。
 - Apple：[HKHealthStore authorizationStatus API](https://developer.apple.com/documentation/healthkit/hkhealthstore/authorizationstatus(for:))——查询指定对象类型的共享/写入授权状态。
-- TrollStore：[官方 README](https://github.com/opa334/TrollStore/blob/main/README.md)——说明支持系统版本范围，以及先给二进制准备自定义 entitlement、由安装器保留该 entitlement 的要求。
+- TrollStore：[官方 README](https://github.com/opa334/TrollStore/blob/main/README.md)——用于核对其支持范围和 entitlement 处理方式；TrollStore 可处理带任意 entitlement 的应用，但安装成功本身并不证明 HealthKit entitlement 存在。
