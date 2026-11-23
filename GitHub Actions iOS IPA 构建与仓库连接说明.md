@@ -146,7 +146,10 @@ GitHub 的套餐、额度和 runner 名称可能调整，实际执行前以 GitH
 - 静态核对：确认工作流只申请 `contents: read` 权限，不读取证书或 profile；`git diff --check` 通过。当前 Windows 环境没有 Xcode，实际构建留待 macOS runner 重试；未运行 XCTest。
 - 对照账号中已有的公开 `lu1ul/HealthMi`：其成功运行使用 `xcodebuild -project ... -scheme HealthMi -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath ... CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY='' build`，再把 `.app` 复制进 `Payload/` 并 zip。私有工作流已采用相同构建参数和打包目录；旧版 iOS 17 源码的成功运行不能覆盖新 Core Data/Swift 6 源码的编译结果。
 - 第三次 Actions 已完成工程生成并启动 Swift 编译，报错定位到 `HealthMi/App/HealthMiApp.swift:60`：全局变量 `NSMergeByPropertyObjectTrumpMergePolicy` 被 Swift 6 strict concurrency 检查判为共享可变状态。将改为使用 `NSMergePolicy(merge: .mergeByPropertyObjectTrumpMergePolicyType)`，保持相同的对象属性优先合并语义。
-- 当前实施状态：私有仓库创建和 `main` 推送已完成；源代码修复及最终成功构建、artifact 下载待完成。
+- 已按 Apple 的 `NSMergePolicy` API 替换共享全局策略变量，提交 `9e19cfa`；macOS 15 / Xcode 16.4 runner 随后成功编译 iOS 16 App、打包并上传无签名 IPA。成功运行 ID 为 `45133048012`，提交 SHA 为 `9e19cfad33f9fc4466c4ed34ecb831c027a2b62d`。
+- 已从私有仓库下载 `HealthMi-unsigned-ipa` artifact 至本机 `build/HealthMi-unsigned-ipa/HealthMi-unsigned.ipa`。文件大小 1,707,045 字节，SHA-256 为 `E64C6982D0E7CE13F4E0EA6CDE619F6C246CEAEE2A5CB82245803612CC6D1021`。检查 ZIP 内容确认包含 `Payload/HealthMi.app/Info.plist`，不含 `_CodeSignature` 或 `embedded.mobileprovision`，符合待用户自行签名的目标。
+- GitHub artifact 设为保留 7 天，当前记录的过期时间为 2026-11-30 07:42 UTC；本地副本不受该期限影响。
+- 当前实施状态：私有仓库和工作流已部署，IPA 已成功构建、下载并完成包结构检查；未运行 XCTest。`origin` 仍指向原仓库，未向其推送。
 
 ### 官方资料补充
 
