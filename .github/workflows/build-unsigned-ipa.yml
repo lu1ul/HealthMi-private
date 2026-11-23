@@ -44,22 +44,25 @@ jobs:
         run: |
           set -euo pipefail
 
-          build_settings=()
-          if [[ -n "$BUNDLE_IDENTIFIER" ]]; then
-            build_settings+=("PRODUCT_BUNDLE_IDENTIFIER=$BUNDLE_IDENTIFIER")
-          fi
+          build_app() {
+            xcodebuild \
+              -project HealthMi.xcodeproj \
+              -target HealthMi \
+              -configuration Release \
+              -sdk iphoneos \
+              -derivedDataPath build/DerivedData \
+              CODE_SIGNING_ALLOWED=NO \
+              CODE_SIGNING_REQUIRED=NO \
+              CODE_SIGN_IDENTITY='' \
+              "$@" \
+              build
+          }
 
-          xcodebuild \
-            -project HealthMi.xcodeproj \
-            -target HealthMi \
-            -configuration Release \
-            -sdk iphoneos \
-            -derivedDataPath build/DerivedData \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY='' \
-            "${build_settings[@]}" \
-            build
+          if [[ -n "$BUNDLE_IDENTIFIER" ]]; then
+            build_app "PRODUCT_BUNDLE_IDENTIFIER=$BUNDLE_IDENTIFIER"
+          else
+            build_app
+          fi
 
       - name: Package unsigned IPA
         run: |
