@@ -36,7 +36,7 @@ HealthKit 在模拟器中的可用性和真实设备不同；模拟器启动检�
 
 ## 尚需的信息
 
-当前尚未获得 iPhone 型号、iOS 版本、用户最终签名方式、实际安装 IPA 的 Bundle ID，也没有 iPhone 的崩溃报告。因此现阶段无法判断是源码启动崩溃还是签名/系统环境差异。无需交出手机，可在 iPhone 打开“设置 → 隐私与安全性 → 分析与改进 → 分析数据”，找到以 `HealthMi_` 开头的崩溃记录，打开后通过分享按钮存到“文件”并把 `.ips` 发来；如果怀疑是内存压力导致系统终止，也可找同一时间附近的 `JetsamEvent_` 记录。Apple 说明 iOS 15 及以上的 `.ips` 是 JSON 格式崩溃报告。也可提供最终签名后的 IPA，以便检查 Bundle ID、签名、entitlements 和 profile；不要发送证书私钥或密码。
+用户已补充设备为 iOS 16.3、已越狱并使用 TrollStore 安装。仍缺少具体签名流程、实际安装 IPA 和设备崩溃报告，因此暂时无法区分应用崩溃与 IPA entitlement/设备环境问题。无需交出手机，可在 iPhone 打开“设置 → 隐私与安全性 → 分析与改进 → 分析数据”，找到以 `HealthMi_` 开头的崩溃记录，打开后通过分享按钮存到“文件”并把 `.ips` 发来；如果怀疑是内存压力导致系统终止，也可找同一时间附近的 `JetsamEvent_` 记录。Apple 说明 iOS 15 及以上的 `.ips` 是 JSON 格式崩溃报告。也可提供最终签名后的 IPA，以便检查 Bundle ID、签名、entitlements 和 profile；不要发送证书私钥或密码。
 
 ## 官方资料
 
@@ -46,6 +46,9 @@ HealthKit 在模拟器中的可用性和真实设备不同；模拟器启动检�
 - [Apple：使用崩溃报告和设备日志诊断问题](https://developer.apple.com/documentation/xcode/diagnosing-issues-using-crash-reports-and-device-logs)：解释崩溃报告与设备控制台日志的用途及获取方法。
 - [Apple：获取崩溃报告和诊断日志](https://developer.apple.com/documentation/xcode/acquiring-crash-reports-and-diagnostic-logs)：设备上从“分析数据”找到以应用二进制名称开头的崩溃报告并分享。
 - [Apple：`.ips` 崩溃报告格式](https://developer.apple.com/documentation/xcode/interpreting-the-json-format-of-a-crash-report)：iOS 15 及以上的 `.ips` 文件包含 JSON 格式的崩溃报告。
+- [TrollStore 官方 README](https://github.com/opa334/TrollStore/blob/main/README.md)：支持版本范围及自定义 entitlements 的准备和保留方式。
+- [Apple：HealthKit entitlement](https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.developer.healthkit)：`com.apple.developer.healthkit` 是 HealthKit 访问能力的 entitlement。
+- [Apple：请求 HealthKit 数据权限](https://developer.apple.com/documentation/healthkit/authorizing-access-to-health-data)：entitlement 与用户针对各类健康数据授予的读写权限是不同环节。
 - [GitHub：管理工作流运行](https://docs.github.com/en/actions/how-tos/manage-workflow-runs)：`workflow_dispatch` 工作流可从 Actions 页面、GitHub CLI 或 API 手动启动。
 
 ## 首次诊断结果（2026-11-23）
@@ -59,10 +62,22 @@ HealthKit 在模拟器中的可用性和真实设备不同；模拟器启动检�
 
 ## 后续定位方向
 
-由于模拟器没有复现，下一步需要对照实际 IPA 和设备崩溃记录。先核实 iPhone 的 iOS 版本以及签名时使用的工具；可从 iPhone 的“设置 → 隐私与安全性 → 分析与改进 → 分析数据”导出 HealthMi 对应的 `.ips` 崩溃记录。也可提供最终签名后的 IPA，以便检查 Bundle ID、签名、entitlements 和 profile；不要分享证书私钥、密码或开发者账号凭据。
+由于模拟器没有复现，且设备为 iOS 16.3/TrollStore，下一步需要对照实际安装的 IPA 和设备崩溃记录。请提供签名时使用的工具，以及闪退时间附近的 `.ips` 报告；报告路径为“设置 → 隐私与安全性 → 分析与改进 → 分析数据”，找到 `HealthMi_` 开头的条目，打开后通过分享按钮存到“文件”。如果没有 HealthMi 报告，可找同一时间附近的 `JetsamEvent_` 记录。也可提供最终签名后的 IPA，以便检查 Bundle ID 和实际 entitlements；不要分享证书私钥、密码或开发者账号凭据。
+
+## iOS 16.3 与 TrollStore 的 entitlement 核查（2026-11-23）
+
+- 用户确认设备为 iOS 16.3，已越狱并通过 TrollStore 安装 IPA。TrollStore 官方 README 的支持范围包含 iOS 16.3。
+- TrollStore 官方说明可在安装时保留自定义 entitlements，但要求先把所需 entitlement 写入 IPA 中的二进制。仅在 `project.yml` 声明 `com.apple.developer.healthkit` 不代表它已进入 IPA；Apple 将此 entitlement 定义为应用请求 HealthKit 授权的能力。
+- HealthKit 有两层独立授权：应用签名里的 `com.apple.developer.healthkit` entitlement，以及用户在系统 HealthKit 授权页对读/写数据类型的选择。TrollStore 安装成功不等于自动具备前一项，也不等于用户已授予后一项。
+- 已检查本仓库此前生成的 `build/HealthMi-unsigned-ipa/HealthMi-unsigned.ipa`：ZIP 内没有 `_CodeSignature` 条目、`embedded.mobileprovision` 或单独的 `.entitlements` 文件，构建工作流也明确关闭了 Xcode 代码签名。因此，项目中的 entitlement 声明没有通过该构建流程写进应用签名。若用户安装的是这份 IPA，HealthKit entitlement 很可能缺失；仍需检查用户实际安装的最终 IPA 才能定论。TrollStore 安装成功本身不能证明 HealthKit 权限存在。
+- 缺少 HealthKit entitlement 可解释 HealthKit API 报错或无法请求健康数据权限；本次 iOS 18.5 模拟器也记录到缺少 entitlement 时应用仍保持运行，因此现有证据不能将它直接认定为 iOS 16.3 上启动即闪退的原因。需要检查用户实际安装的 IPA 或 `.ips` 崩溃报告。
+- TrollStore 官方 README 还说明，图标缓存重载后，TrollStore 安装的应用可能退回 User 状态并无法启动，需通过 Persistence Helper 重新注册。如果其他 TrollStore 应用也同时无法启动，这一项值得优先核查；如果只有 HealthMi 闪退，则更需要检查该 IPA 和崩溃报告。
+- 后续若为 TrollStore 制作 IPA，应在打包前向主程序及需要的嵌入式可执行文件写入所需 entitlements，并检查最终包内签名结果；不能只依赖 `project.yml` 中的 entitlement 声明。
+- 本机 Windows 环境的签名检查工具要求 macOS，无法对用户最终签名的 IPA 直接运行 `codesign` 核验；当前拿到的仅为本仓库未签名 IPA。
 
 ## 实施记录
 
 - 新增手动工作流与本记录，提交 `b37c4a0`（`ci: add manual simulator startup diagnostics`），推送到个人私有仓库 `lu1ul/HealthMi-private`；没有推送到上游 `origin`。
 - 已手动运行 workflow_dispatch 并下载、检查 artifact；模拟器进程存活检查通过，见上方首次诊断结果。
 - 补充 Apple 官方 `.ips` 采集说明，供无需提供真机的后续诊断使用。
+- 根据用户提供的 iOS 16.3/TrollStore 环境核查 HealthKit entitlement，并检查此前生成的无签名 IPA。
