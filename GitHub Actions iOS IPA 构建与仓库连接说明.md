@@ -49,6 +49,12 @@ gh auth status
 
 `gh auth login` 中选择 GitHub.com、HTTPS 和浏览器登录；当它询问是否让 Git 使用 GitHub 凭据时选择 Yes。如果 Git 后续仍未使用该登录，可运行 `gh auth setup-git` 配置凭据助手。
 
+### 设备码与手机二步验证
+
+`gh auth login --web` 使用 GitHub OAuth device flow：一次性设备码由 `gh` 在电脑终端显示，并可复制到剪贴板。用户需要在 GitHub 设备登录页面输入该码并批准授权；GitHub 不会把这个设备码短信发送到手机，也不会自动推送给 GitHub Mobile。不要把设备码或二步验证码发到聊天中。
+
+如果账号随后要求二步验证，应使用账号里已配置的方法：GitHub Mobile 的登录批准通知、验证器应用生成的 TOTP 代码、已配置的短信，或 passkey/security key。验证器代码由应用本地生成，并非 GitHub 发送的短信。如果设备码过期，应在本地终端重新运行 `gh auth login --hostname github.com --git-protocol https --web` 获取新码。
+
 登录后，在 GitHub 网页创建自己的私有空仓库，再在本地添加个人 remote：
 
 ```powershell
@@ -92,6 +98,8 @@ git push -u personal main
 - [设置预算控制计量产品支出](https://docs.github.com/en/billing/how-tos/set-up-budgets)：设置用量告警和达到预算后停止使用。
 - [Windows 安装 GitHub CLI](https://github.com/cli/cli/blob/trunk/docs/install_windows.md)：使用 Windows Package Manager 安装 `gh`。
 - [`gh auth login`](https://cli.github.com/manual/gh_auth_login) 与 [`gh auth setup-git`](https://cli.github.com/manual/gh_auth_setup-git)：浏览器认证并配置 Git 凭据助手。
+- [GitHub 设备登录页](https://github.com/login/device)：粘贴 `gh` 在本地终端生成的一次性设备码。
+- [使用二步验证访问 GitHub](https://docs.github.com/en/authentication/securing-your-account-with-two-factor-authentication-2fa/accessing-github-using-two-factor-authentication)：GitHub Mobile、TOTP、短信、passkey 和安全密钥等验证选项。
 - [GitHub Desktop 身份验证](https://docs.github.com/en/desktop/installing-and-authenticating-to-github-desktop) 与[添加已有项目](https://docs.github.com/en/desktop/adding-and-cloning-repositories/adding-an-existing-project-to-github-using-github-desktop)：Desktop 登录及现有仓库发布流程。
 - [Workflow Artifacts](https://docs.github.com/en/actions/concepts/workflows-and-actions/workflow-artifacts)：工作流生成文件的上传和下载。
 - [在 GitHub Actions 中使用 Secrets](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-secrets)：向工作流提供敏感值。
