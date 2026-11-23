@@ -36,7 +36,7 @@ HealthKit 在模拟器中的可用性和真实设备不同；模拟器启动检�
 
 ## 尚需的信息
 
-当前尚未获得 iPhone 型号、iOS 版本、用户最终签名方式、实际安装 IPA 的 Bundle ID，也没有 iPhone 的崩溃报告。因此现阶段无法判断是源码启动崩溃还是签名/系统环境差异；先运行模拟器诊断，若模拟器不复现，再根据结果只索取进一步区分问题所需的信息。不要发送证书私钥或密码。
+当前尚未获得 iPhone 型号、iOS 版本、用户最终签名方式、实际安装 IPA 的 Bundle ID，也没有 iPhone 的崩溃报告。因此现阶段无法判断是源码启动崩溃还是签名/系统环境差异。无需交出手机，可在 iPhone 打开“设置 → 隐私与安全性 → 分析与改进 → 分析数据”，找到以 `HealthMi_` 开头的崩溃记录，打开后通过分享按钮存到“文件”并把 `.ips` 发来；如果怀疑是内存压力导致系统终止，也可找同一时间附近的 `JetsamEvent_` 记录。Apple 说明 iOS 15 及以上的 `.ips` 是 JSON 格式崩溃报告。也可提供最终签名后的 IPA，以便检查 Bundle ID、签名、entitlements 和 profile；不要发送证书私钥或密码。
 
 ## 官方资料
 
@@ -44,6 +44,8 @@ HealthKit 在模拟器中的可用性和真实设备不同；模拟器启动检�
 - [Apple：与模拟器交互](https://developer.apple.com/library/archive/documentation/IDEs/Conceptual/iOS_Simulator_Guide/InteractingwiththeiOSSimulator/InteractingwiththeiOSSimulator.html)：介绍启动模拟器及通过 `xcrun simctl` 操作模拟器。
 - [Apple：查看日志消息](https://developer.apple.com/documentation/os/viewing-log-messages)：可用 `log` 命令读取统一日志。
 - [Apple：使用崩溃报告和设备日志诊断问题](https://developer.apple.com/documentation/xcode/diagnosing-issues-using-crash-reports-and-device-logs)：解释崩溃报告与设备控制台日志的用途及获取方法。
+- [Apple：获取崩溃报告和诊断日志](https://developer.apple.com/documentation/xcode/acquiring-crash-reports-and-diagnostic-logs)：设备上从“分析数据”找到以应用二进制名称开头的崩溃报告并分享。
+- [Apple：`.ips` 崩溃报告格式](https://developer.apple.com/documentation/xcode/interpreting-the-json-format-of-a-crash-report)：iOS 15 及以上的 `.ips` 文件包含 JSON 格式的崩溃报告。
 - [GitHub：管理工作流运行](https://docs.github.com/en/actions/how-tos/manage-workflow-runs)：`workflow_dispatch` 工作流可从 Actions 页面、GitHub CLI 或 API 手动启动。
 
 ## 首次诊断结果（2026-11-23）
@@ -63,3 +65,4 @@ HealthKit 在模拟器中的可用性和真实设备不同；模拟器启动检�
 
 - 新增手动工作流与本记录，提交 `b37c4a0`（`ci: add manual simulator startup diagnostics`），推送到个人私有仓库 `lu1ul/HealthMi-private`；没有推送到上游 `origin`。
 - 已手动运行 workflow_dispatch 并下载、检查 artifact；模拟器进程存活检查通过，见上方首次诊断结果。
+- 补充 Apple 官方 `.ips` 采集说明，供无需提供真机的后续诊断使用。
