@@ -1,11 +1,10 @@
 import Foundation
-import SwiftData
-import SwiftUI
 
 /// 数据导出：按天汇总最近 N 天数据，生成 CSV。
+@MainActor
 enum DataExporter {
     /// 导出最近 N 天的每日数据为 CSV 字符串。
-    static func exportCSV(days: Int, trends: [DailyTrend], stressRecords: [StressRecord]) -> String {
+    static func exportCSV(days: Int, trends: [DailyTrend], stressRecords: [StressRecordEntity]) -> String {
         let dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "yyyy-MM-dd"
         dateFormatter.timeZone = .current

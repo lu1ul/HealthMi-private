@@ -1,8 +1,10 @@
 import Foundation
+import CoreData
 import SwiftData
 import os
 
-/// 单次类型同步的历史记录。
+/// iOS 17 旧库中的 SwiftData 同步日志模型，仅供迁移器读取。
+@available(iOS 17.0, *)
 @Model
 final class SyncLogEntry {
     var timestamp: Date
@@ -26,51 +28,63 @@ final class SyncLogEntry {
     }
 }
 
-/// 同步日志存取（MainActor，SwiftData 上下文非 Sendable）。
+/// 同步日志存取。
 @MainActor
 enum SyncLogStore {
 
     static func append(
         type: SyncDataType, fetched: Int, added: Int,
-        success: Bool, errorMessage: String? = nil, in context: ModelContext
+        success: Bool, errorMessage: String? = nil, in context: NSManagedObjectContext
     ) {
-        let entry = SyncLogEntry(
-            timestamp: Date(),
-            typeRawValue: type.rawValue,
-            fetched: fetched, added: added,
-            success: success, errorMessage: errorMessage
-        )
-        context.insert(entry)
+        let entry = NSEntityDescription.insertNewObject(
+            forEntityName: "SyncLogEntryEntity", into: context
+        ) as! SyncLogEntryEntity
+        entry.timestamp = Date()
+        entry.typeRawValue = type.rawValue
+        entry.fetched = Int64(fetched)
+        entry.added = Int64(added)
+        entry.success = success
+        entry.errorMessage = errorMessage
         do {
             try context.save()
         } catch {
             AppLog.syncLogStore.error("保存同步日志失败：\(error.localizedDescription)")
+            context.rollback()
         }
         pruneOldEntries(in: context)
     }
 
     /// 保留最近 200 条日志，避免无限增长。
-    private static func pruneOldEntries(in context: ModelContext) {
-        let descriptor = FetchDescriptor<SyncLogEntry>(
-            sortBy: [SortDescriptor(\.timestamp, order: .reverse)]
-        )
-        guard let all = try? context.fetch(descriptor) else { return }
+    private static func pruneOldEntries(in context: NSManagedObjectContext) {
+        let request = SyncLogEntryEntity.fetchRequest()
+        request.sortDescriptors = [NSSortDescriptor(key: "timestamp", ascending: false)]
+        guard let all = try? context.fetch(request) else { return }
         let limit = 200
         if all.count > limit {
             for entry in all.dropFirst(limit) {
                 context.delete(entry)
             }
-            try? context.save()
+            do {
+                try context.save()
+            } catch {
+                context.rollback()
+                AppLog.syncLogStore.error("清理旧同步日志失败：\(error.localizedDescription)")
+            }
         }
     }
 
-    static func clearAll(in context: ModelContext) {
-        let descriptor = FetchDescriptor<SyncLogEntry>()
-        if let entries = try? context.fetch(descriptor) {
+    static func clearAll(in context: NSManagedObjectContext) {
+        let request = SyncLogEntryEntity.fetchRequest()
+        if let entries = try? context.fetch(request) {
             for entry in entries {
                 context.delete(entry)
             }
-            try? context.save()
+            do {
+                try context.save()
+            } catch {
+                context.rollback()
+                AppLog.syncLogStore.error("清除同步日志失败：\(error.localizedDescription)")
+            }
         }
     }
 }

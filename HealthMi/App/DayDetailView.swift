@@ -1,12 +1,12 @@
-import SwiftData
 import SwiftUI
 
 /// 单日详情页面：展示某天的所有健康数据。
+@MainActor
 struct DayDetailView: View {
     let trend: DailyTrend
-    let stressRecords: [StressRecord]
+    let stressRecords: [StressRecordEntity]
 
-    private var dayStressRecords: [StressRecord] {
+    private var dayStressRecords: [StressRecordEntity] {
         let calendar = Calendar.current
         let dayStart = calendar.startOfDay(for: trend.date)
         let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
@@ -30,7 +30,7 @@ struct DayDetailView: View {
 
             if !dayStressRecords.isEmpty {
                 Section("压力记录") {
-                    ForEach(dayStressRecords, id: \.persistentModelID) { record in
+                    ForEach(dayStressRecords, id: \.objectID) { record in
                         LabeledContent(
                             record.timestamp.formatted(date: .omitted, time: .shortened),
                             value: "\(record.stressScore)"

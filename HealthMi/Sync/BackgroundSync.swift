@@ -13,7 +13,7 @@ enum BackgroundSync {
     @MainActor private static var didRegister = false
 
     @MainActor
-    static func register(syncHandler: @escaping @MainActor () async -> Void) {
+    static func register(syncHandler: @escaping @MainActor () async -> Bool) {
         guard !didRegister else { return }
         didRegister = true
         BGTaskScheduler.shared.register(forTaskWithIdentifier: taskIdentifier, using: nil) { task in
@@ -30,8 +30,10 @@ enum BackgroundSync {
                 refreshTask.setTaskCompleted(success: false)
             }
             syncTask = Task { @MainActor in
-                await syncHandler()
-                refreshTask.setTaskCompleted(success: true)
+                let succeeded = await syncHandler()
+                guard !Task.isCancelled else { return }
+                refreshTask.setTaskCompleted(success: succeeded)
+                syncTask = nil
             }
         }
     }

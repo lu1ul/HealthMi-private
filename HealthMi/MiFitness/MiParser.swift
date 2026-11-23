@@ -1,5 +1,15 @@
 import Foundation
 
+enum MiParserError: LocalizedError {
+    case invalidStressRecord
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidStressRecord: return "小米云端返回了无法解析的压力记录，已保留本地数据。"
+        }
+    }
+}
+
 /// 把云端原始条目（`[MiItem]`）解析为业务模型。
 /// Swift 移植自 `mi_fitness_cloud.py` 的各 `iter_*` 方法，字段与解析规则保持一致。
 enum MiParser {
@@ -158,7 +168,7 @@ enum MiParser {
         return out
     }
 
-    static func stressSamples(_ items: [MiItem]) -> [MiStressSample] {
+    static func stressSamples(_ items: [MiItem]) throws -> [MiStressSample] {
         var out: [MiStressSample] = []
         for item in items {
             let payload = valueObject(item)
@@ -166,12 +176,11 @@ enum MiParser {
             let stress = MiJSON.int(payload["stress"])
                 ?? MiJSON.int(payload["score"])
                 ?? MiJSON.int(payload["value"])
-            if let ts, let stress {
-                out.append(MiStressSample(
-                    timestamp: Date(timeIntervalSince1970: Double(ts)),
-                    stressScore: stress
-                ))
-            }
+            guard let ts, let stress else { throw MiParserError.invalidStressRecord }
+            out.append(MiStressSample(
+                timestamp: Date(timeIntervalSince1970: Double(ts)),
+                stressScore: stress
+            ))
         }
         return out
     }

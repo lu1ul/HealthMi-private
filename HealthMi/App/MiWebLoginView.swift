@@ -6,8 +6,9 @@ import WebKit
 /// 密码、验证码都在小米官方页面内完成，App 不接触密码；登录成功后从 WebView
 /// 的 Cookie 中提取 `userId` + `passToken`，调用 `AppModel.saveCredentials`
 /// 存入钥匙串并校验连接，随后通过 `onConnected` 通知父视图。
+@MainActor
 struct MiWebLoginView: View {
-    @Environment(AppModel.self) private var model
+    @EnvironmentObject private var model: AppModel
     @Environment(\.dismiss) private var dismiss
 
     /// 登录成功并保存凭据后，由父视图执行的后续动作（如首次使用请求 HealthKit 授权）。
@@ -215,7 +216,9 @@ private final class MiWebLoginController: NSObject, WKNavigationDelegate, WKUIDe
     }
 }
 
-#Preview {
-    MiWebLoginView()
-        .environment(AppModel())
+@MainActor
+struct MiWebLoginView_Previews: PreviewProvider {
+    static var previews: some View {
+        MiWebLoginView().environmentObject(AppModel())
+    }
 }

@@ -16,9 +16,10 @@ struct SyncHealthDataIntent: AppIntent {
         let model = AppModel()
         // 补上用户自定义的同步类别开关等持久化状态
         model.bootstrap()
+        let container = try await AppDatabase.shared.prepare()
         let syncTask = Task { @MainActor in
             await model.syncAll(
-                modelContext: AppDatabase.container.mainContext,
+                modelContext: container.viewContext,
                 isBackground: true
             )
         }

@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		C016DADA0000000000000001 /* CoreDataModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = C016DADA0000000000000002 /* CoreDataModels.swift */; };
 		00B6417CEF09B90A63A9E08C /* SyncEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = FAE42963B0DA22F1D3A79BD4 /* SyncEngine.swift */; };
 		0A354162109CDE65AA26CC7C /* SyncEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E84D3AB8A04983B253EB8C2D /* SyncEngineTests.swift */; };
 		1E1BBEC48FFED51E03E7AC6B /* MiParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03EB6FDE05824AFA45771995 /* MiParserTests.swift */; };
@@ -59,6 +60,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		C016DADA0000000000000002 /* CoreDataModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreDataModels.swift; sourceTree = "<group>"; };
 		01EA0F17336B878185081390 /* MiWebLoginView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MiWebLoginView.swift; sourceTree = "<group>"; };
 		028389EDD4D2D68BA73947B0 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		03EB6FDE05824AFA45771995 /* MiParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MiParserTests.swift; sourceTree = "<group>"; };
@@ -209,6 +211,7 @@
 			isa = PBXGroup;
 			children = (
 				958D958B50ADE261F3509087 /* BackgroundSync.swift */,
+				C016DADA0000000000000002 /* CoreDataModels.swift */,
 				DEA2A833A9B953A9D0AE4F1C /* MigrationPlan.swift */,
 				A8E5A617ADC0F1D321F07B42 /* StressStore.swift */,
 				FAE42963B0DA22F1D3A79BD4 /* SyncEngine.swift */,
@@ -369,6 +372,7 @@
 				9EB94346E8064DEB591BC8A9 /* MiWebLogin.swift in Sources */,
 				474FB5785149C5AD226193ED /* MiWebLoginView.swift in Sources */,
 				D8DF600E483FE99D5BB9EA63 /* MigrationPlan.swift in Sources */,
+				C016DADA0000000000000001 /* CoreDataModels.swift in Sources */,
 				961972462B2822830BF4E174 /* NotificationManager.swift in Sources */,
 				A088A41ECFD8BFEE523CF0C6 /* OnboardingView.swift in Sources */,
 				73C9763657E92E9ED4E417A7 /* RootView.swift in Sources */,
@@ -480,7 +484,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				MARKETING_VERSION = 1.0.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
@@ -547,7 +551,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				MARKETING_VERSION = 1.0.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;

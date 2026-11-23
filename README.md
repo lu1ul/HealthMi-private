@@ -15,7 +15,7 @@
 - **同步历史日志**：持久化每次同步的结果（成功/失败/拉取数/新增数），自动裁剪 200 条
 - **数据导出**：一键导出最近 7 天每日数据为 CSV，通过系统分享面板发送
 - **快捷指令**：通过 Siri 或快捷指令触发同步（"同步 HealthMi 健康数据"）
-- **压力数据展示**：从小米云端读取 stress key，存入 App 内 SwiftData 展示（HealthKit 无对应类型）
+- **压力数据展示**：从小米云端读取 stress key，存入 App 内 Core Data 展示（HealthKit 无对应类型）
 - **WebView 登录**：App 内 WKWebView 登录小米账号页面，自动捕获 Cookie
 
 ## 原理
@@ -41,7 +41,7 @@
 | 心率变异性（睡眠 HRV） | `heartRateVariabilitySDNN` | ms |
 | 体重 / 体脂 / BMI / 肌肉量 / 基础代谢 | `bodyMass` / `bodyFatPercentage` / `bodyMassIndex` / `leanBodyMass` / `basalEnergyBurned` | 体脂百分比 → 分数 |
 | 运动 | `HKWorkout` | 关键词映射 `HKWorkoutActivityType`，关联平均/最大心率样本 |
-| 压力 | App 内 SwiftData 展示 | HealthKit 无对应类型，存 App 内不写入 HealthKit |
+| 压力 | App 内 Core Data 展示 | HealthKit 无对应类型，存 App 内不写入 HealthKit |
 
 > abnormal_heart_beat 暂无 HealthKit 对应类型，未纳入（数据仍可从小米云端读到）。
 
@@ -58,7 +58,7 @@ HealthMi/
     TrendChartView    Swift Charts 趋势图
   MiFitness/         小米云 API 的 Swift 移植（Crypto/Session/API/Models/Parser/Region）
   Health/            HealthKit 授权、幂等写入器、数据映射、读取器
-  Sync/              同步引擎、SwiftData 游标、后台任务、压力存储、日志、迁移
+    Sync/              同步引擎、Core Data 存储、旧 SwiftData 迁移、后台任务
   Support/           Info.plist、HealthKit entitlement、通知管理、统一日志
   Resources/         资源（AppIcon 等）
 HealthMiTests/       加密向量 / 解析 / 映射 / 引擎 / 游标 / 区域 单测
@@ -69,7 +69,7 @@ tools/               已验证的 Python 参考实现（mi-fitness-mcp-cn）
 
 - Xcode 16+（Swift 6.0）
 - [XcodeGen](https://github.com/yonaskolb/XcodeGen)（`brew install xcodegen`）
-- iOS 17.0+（部署目标）
+- iOS 16.0+（最低部署目标）
 - 真机写入 HealthKit 需要付费开发者账号
 
 ## 构建与测试
@@ -111,8 +111,9 @@ xcodebuild -project HealthMi.xcodeproj -scheme HealthMi \
 - **HealthKit 仅 iOS 可用**：原生 macOS App 无法写 HealthKit（需 Mac Catalyst + entitlement），因此本方案做成纯 iOS。
 - **后台同步**：已接入 `BGAppRefreshTask`（每小时周期刷新），模拟器不触发，需真机验证。用户从多任务划掉 App 后后台任务不触发，直到再次打开 App。
 - **真机部署**：把 `project.yml` 里的 `PRODUCT_BUNDLE_IDENTIFIER` 换成你自己的，并在 Xcode 中配置开发团队（HealthKit entitlement 需要付费开发者账号）。
-- **运动记录**：用 `HKWorkoutBuilder` 构建（iOS 17 起旧 `HKWorkout` 构造器已废弃）；关联平均/最大心率样本（不与日总计重复计数）；不关联能量/距离样本，避免与每日活动总量重复计算。
-- **压力数据**：从小米云端读取 stress key，存入 App 内 SwiftData 展示（不写入 HealthKit，因其无对应类型）。
+- **运动记录**：用 `HKWorkoutBuilder` 构建；关联平均/最大心率样本（不与日总计重复计数）；不关联能量/距离样本，避免与每日活动总量重复计算。
+- **本地数据库**：Core Data 存储同步游标、压力记录和同步历史。升级到本版本的 iOS 17+ 用户会在首次启动时导入旧 SwiftData 数据；迁移完成前原 SwiftData 库保留，迁移失败时应用提供重试入口。
+- **压力数据**：从小米云端读取 stress key，存入 App 内 Core Data 展示（不写入 HealthKit，因其无对应类型）；回填只替换 API 实际查询的时间范围。
 - **API 健壮性**：网络错误自动重试（指数退避 + 抖动，最多 3 次），分页请求间 200ms 间隔避免限流，认证错误（code=70016）不重试。
 
 ## 测试说明

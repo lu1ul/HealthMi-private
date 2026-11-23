@@ -1,8 +1,9 @@
 import SwiftUI
 
 /// 首次使用：输入小米凭据 → 验证连接 → 请求 HealthKit 授权。
+@MainActor
 struct OnboardingView: View {
-    @Environment(AppModel.self) private var model
+    @EnvironmentObject private var model: AppModel
 
     @State private var userId = ""
     @State private var passToken = ""
@@ -137,7 +138,9 @@ struct OnboardingView: View {
     }
 }
 
-#Preview {
-    OnboardingView()
-        .environment(AppModel())
+@MainActor
+struct OnboardingView_Previews: PreviewProvider {
+    static var previews: some View {
+        OnboardingView().environmentObject(AppModel())
+    }
 }

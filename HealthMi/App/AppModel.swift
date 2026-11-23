@@ -1,8 +1,8 @@
 import Foundation
 import HealthKit
-import Observation
+import CoreData
+import Combine
 import os
-import SwiftData
 
 enum AppError: LocalizedError {
     case noCredentials
@@ -18,24 +18,23 @@ enum AppError: LocalizedError {
 
 /// 应用全局状态（主线程）。
 @MainActor
-@Observable
-final class AppModel {
-    var isConfigured = false
-    var connected = false
-    var accountID = ""
-    var healthKitAuthorized = false
-    var isSyncing = false
-    var backfillDays = 30
-    var statusMessage = ""
-    var lastError: String?
-    var outcomes: [SyncDataType: SyncOutcome] = [:]
+final class AppModel: ObservableObject {
+    @Published var isConfigured = false
+    @Published var connected = false
+    @Published var accountID = ""
+    @Published var healthKitAuthorized = false
+    @Published var isSyncing = false
+    @Published var backfillDays = 30
+    @Published var statusMessage = ""
+    @Published var lastError: String?
+    @Published var outcomes: [SyncDataType: SyncOutcome] = [:]
     /// 最近 N 天数据概览（从 HealthKit 读回，用于 App 内回显）。
-    var summary: HealthSummary?
+    @Published var summary: HealthSummary?
     /// 最近 N 天每日趋势（用于 Charts）。
-    var trends: [DailyTrend] = []
+    @Published var trends: [DailyTrend] = []
     /// 当前正在同步的类型索引和总数（用于进度显示）。
-    var currentSyncIndex: Int = 0
-    var totalSyncCount: Int = 0
+    @Published var currentSyncIndex: Int = 0
+    @Published var totalSyncCount: Int = 0
 
     /// 同步进度文字，如 "正在同步 3/9"。
     var syncProgressText: String? {
@@ -44,10 +43,10 @@ final class AppModel {
     }
 
     /// 小米凭据是否已过期/无效（需要用户重新登录获取新 token）。
-    var authNeedsRefresh = false
+    @Published var authNeedsRefresh = false
 
     /// 已启用的同步类别（持久化到 UserDefaults，默认全部启用）。
-    var enabledTypes: Set<SyncDataType> = Set(SyncDataType.allCases)
+    @Published var enabledTypes: Set<SyncDataType> = Set(SyncDataType.allCases)
 
     private var engine: SyncEngine?
 
@@ -105,7 +104,7 @@ final class AppModel {
         refreshHealthKitStatus()
     }
 
-    func disconnect(modelContext: ModelContext? = nil) {
+    func disconnect(modelContext: NSManagedObjectContext? = nil) {
         engine = nil
         CredentialStore.delete()
         isConfigured = false
@@ -169,7 +168,7 @@ final class AppModel {
     /// - Parameters:
     ///   - forceBackfill: 为 true 时忽略增量游标，按 `backfillDays` 重新回填历史。
     ///   - isBackground: 是否为后台同步触发（失败时发送本地通知）。
-    func syncAll(modelContext: ModelContext, forceBackfill: Bool = false, isBackground: Bool = false) async {
+    func syncAll(modelContext: NSManagedObjectContext, forceBackfill: Bool = false, isBackground: Bool = false) async {
         guard Self.syncActivity.withLock({ state in
             if state { return false }
             state = true
@@ -211,24 +210,26 @@ final class AppModel {
             currentSyncIndex += 1
             // 后台同步被系统取消时，尽早退出
             if Task.isCancelled { break }
-            let highWater = SyncStateStore.state(for: type, in: modelContext)?.lastSyncedEnd
             do {
+                let highWater = try SyncStateStore.state(for: type, in: modelContext)?.lastSyncedEnd
                 if type == .stress {
-                    // 压力数据不走 HealthKit，走 SwiftData
+                    // 压力数据不走 HealthKit，存入 Core Data 供 App 内展示
                     let result = try await engine?.syncStress(
                         highWater: highWater, backfillDays: backfillDays,
                         forceBackfill: forceBackfill
                     )
                     if let result {
-                        if forceBackfill {
-                            StressStore.clearAll(in: modelContext)
-                        }
-                        let added = StressStore.save(samples: result.samples, in: modelContext)
+                        let added = try StressStore.replaceRange(
+                            start: result.queriedStart,
+                            end: result.queriedEnd,
+                            samples: result.samples,
+                            in: modelContext
+                        )
                         let outcome = SyncOutcome(
                             type: .stress, fetched: result.samples.count,
                             added: added, highWater: result.outcome.highWater
                         )
-                        SyncStateStore.record(
+                        try SyncStateStore.record(
                             type: .stress, highWater: outcome.highWater,
                             added: added, in: modelContext
                         )
@@ -245,7 +246,7 @@ final class AppModel {
                         forceBackfill: forceBackfill
                     )
                     if let outcome {
-                        SyncStateStore.record(
+                        try SyncStateStore.record(
                             type: type, highWater: outcome.highWater,
                             added: outcome.added, in: modelContext
                         )

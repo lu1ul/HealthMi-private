@@ -1,7 +1,8 @@
 import SwiftUI
 
+@MainActor
 struct RootView: View {
-    @Environment(AppModel.self) private var model
+    @EnvironmentObject private var model: AppModel
 
     var body: some View {
         Group {
@@ -15,7 +16,9 @@ struct RootView: View {
     }
 }
 
-#Preview {
-    RootView()
-        .environment(AppModel())
+@MainActor
+struct RootView_Previews: PreviewProvider {
+    static var previews: some View {
+        RootView().environmentObject(AppModel())
+    }
 }

@@ -63,6 +63,15 @@ final class MiParserTests: XCTestCase {
         XCTAssertEqual(session.stageSummary[.rem], 30)
     }
 
+    func testStressParserRejectsMalformedRecordsInsteadOfReturningPartialResults() throws {
+        let valid = item(time: 1_782_000_000, value: ["stress": 38])
+        let malformed = item(time: 1_782_003_600, value: ["unrelated": 1])
+
+        XCTAssertEqual(try MiParser.stressSamples([valid]).first?.stressScore, 38)
+        XCTAssertThrowsError(try MiParser.stressSamples([valid, malformed]))
+        XCTAssertNoThrow(try MiParser.stressSamples([]))
+    }
+
     func testWorkoutsParsing() {
         let start = 1_782_000_000
         let value = #"{"start_time": 1782000000, "end_time": 1782003600, "duration": 3600, "distance": 10000, "calories": 500, "avg_hrm": 140, "max_hrm": 175}"#

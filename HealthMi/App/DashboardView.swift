@@ -1,17 +1,27 @@
-import SwiftData
+import CoreData
 import SwiftUI
 
 /// 主界面：账号/权限状态、同步控制、各类数据游标。
+@MainActor
 struct DashboardView: View {
-    @Environment(AppModel.self) private var model
-    @Environment(\.modelContext) private var modelContext
-
-    @Query(sort: \SyncState.typeRawValue) private var syncStates: [SyncState]
-    @Query(sort: \StressRecord.timestamp, order: .reverse) private var recentStress: [StressRecord]
+    @EnvironmentObject private var model: AppModel
+    @Environment(\.managedObjectContext) private var modelContext
+    @FetchRequest(sortDescriptors: [NSSortDescriptor(key: "typeRawValue", ascending: true)])
+    private var syncStates: FetchedResults<SyncStateEntity>
+    @FetchRequest(sortDescriptors: [NSSortDescriptor(key: "timestamp", ascending: false)])
+    private var recentStress: FetchedResults<StressRecordEntity>
     @AppStorage("mi_region") private var regionRaw = MiRegion.cn.rawValue
     @State private var showRebackfillConfirm = false
     @State private var showWebLogin = false
     @State private var exportFileURL: URL?
+
+    init() {
+        let cutoff = Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? Date()
+        _recentStress = FetchRequest(
+            sortDescriptors: [NSSortDescriptor(key: "timestamp", ascending: false)],
+            predicate: NSPredicate(format: "timestamp >= %@", cutoff as NSDate)
+        )
+    }
 
     private var region: MiRegion { .init(rawValue: regionRaw) ?? .cn }
 
@@ -29,7 +39,6 @@ struct DashboardView: View {
     }
 
     var body: some View {
-        @Bindable var model = model
         NavigationStack {
             List {
                 Section("账号") {
@@ -157,7 +166,7 @@ struct DashboardView: View {
                 // ---------- 数据导出 ----------
                 Section {
                     Button {
-                        let csv = DataExporter.exportCSV(days: 7, trends: model.trends, stressRecords: recentStress)
+                        let csv = DataExporter.exportCSV(days: 7, trends: model.trends, stressRecords: Array(recentStress))
                         exportFileURL = DataExporter.writeCSV(csv)
                     } label: {
                         Label("导出最近 7 天数据（CSV）", systemImage: "square.and.arrow.up")
@@ -177,7 +186,7 @@ struct DashboardView: View {
                         TrendChartsSection()
                         ForEach(model.trends.reversed(), id: \.date) { trend in
                             NavigationLink {
-                                DayDetailView(trend: trend, stressRecords: recentStress)
+                                DayDetailView(trend: trend, stressRecords: Array(recentStress))
                             } label: {
                                 daySummaryRow(trend)
                             }
@@ -291,10 +300,13 @@ struct DashboardView: View {
     }
 }
 
-#Preview {
-    DashboardView()
-        .environment(AppModel())
-        .modelContainer(for: [SyncState.self, StressRecord.self])
+@MainActor
+struct DashboardView_Previews: PreviewProvider {
+    static var previews: some View {
+        DashboardView()
+            .environmentObject(AppModel())
+            .environment(\.managedObjectContext, CoreDataSchema.makePreviewContainer().viewContext)
+    }
 }
 
 /// UIActivityViewController 的 SwiftUI 包装。

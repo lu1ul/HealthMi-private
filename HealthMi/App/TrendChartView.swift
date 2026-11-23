@@ -52,8 +52,9 @@ struct TrendChartView: View {
 }
 
 /// 7 天趋势图表区域。
+@MainActor
 struct TrendChartsSection: View {
-    @Environment(AppModel.self) private var model
+    @EnvironmentObject private var model: AppModel
 
     var body: some View {
         VStack(spacing: 16) {

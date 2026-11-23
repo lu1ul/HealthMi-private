@@ -1,16 +1,25 @@
-import SwiftData
+import CoreData
 import SwiftUI
 
 /// 同步历史日志页面。
+@MainActor
 struct SyncHistoryView: View {
-    @Query(sort: \SyncLogEntry.timestamp, order: .reverse) private var entries: [SyncLogEntry]
+    @FetchRequest(sortDescriptors: [NSSortDescriptor(key: "timestamp", ascending: false)])
+    private var entries: FetchedResults<SyncLogEntryEntity>
 
     var body: some View {
         List {
             if entries.isEmpty {
-                ContentUnavailableView("暂无同步记录", systemImage: "clock")
+                VStack(spacing: 8) {
+                    Image(systemName: "clock")
+                        .font(.largeTitle)
+                        .foregroundStyle(.secondary)
+                    Text("暂无同步记录")
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, minHeight: 180)
             } else {
-                ForEach(entries, id: \.persistentModelID) { entry in
+                ForEach(entries, id: \.objectID) { entry in
                     logRow(entry)
                 }
             }
@@ -18,7 +27,7 @@ struct SyncHistoryView: View {
         .navigationTitle("同步历史")
     }
 
-    private func logRow(_ entry: SyncLogEntry) -> some View {
+    private func logRow(_ entry: SyncLogEntryEntity) -> some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
                 HStack {
@@ -54,9 +63,12 @@ struct SyncHistoryView: View {
     }
 }
 
-#Preview {
-    NavigationStack {
-        SyncHistoryView()
-            .modelContainer(for: SyncLogEntry.self)
+@MainActor
+struct SyncHistoryView_Previews: PreviewProvider {
+    static var previews: some View {
+        NavigationStack {
+            SyncHistoryView()
+                .environment(\.managedObjectContext, CoreDataSchema.makePreviewContainer().viewContext)
+        }
     }
 }

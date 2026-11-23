@@ -120,18 +120,27 @@ actor SyncEngine {
         return SyncOutcome(type: type, fetched: fetched, added: added, highWater: now)
     }
 
-    /// 压力数据同步：从云端拉取 stress key，返回解析后的压力样本。
-    /// 压力数据无 HealthKit 对应类型，由 AppModel 写入 SwiftData。
-    /// - Returns: (压力样本列表, 同步结果摘要)
+    /// 压力数据同步：从云端拉取 stress key，返回样本及 API 实际查询范围。
+    /// 压力数据无 HealthKit 对应类型，由 AppModel 写入 Core Data。
     func syncStress(
         highWater: Date?, backfillDays: Int, forceBackfill: Bool = false
-    ) async throws -> (samples: [MiStressSample], outcome: SyncOutcome) {
-        let (start, now, startTime, endTime) = syncWindow(
+    ) async throws -> (
+        samples: [MiStressSample], outcome: SyncOutcome,
+        queriedStart: Date, queriedEnd: Date
+    ) {
+        let (_, now, startTime, endTime) = syncWindow(
             highWater: highWater, backfillDays: backfillDays, forceBackfill: forceBackfill
         )
         let items = try await client.fetchData(key: "stress", startTime: startTime, endTime: endTime)
-        let samples = MiParser.stressSamples(items)
-        return (samples, SyncOutcome(type: .stress, fetched: samples.count, added: 0, highWater: now))
+        let samples = try MiParser.stressSamples(items)
+        let queriedStart = Date(timeIntervalSince1970: TimeInterval(startTime))
+        let queriedEnd = Date(timeIntervalSince1970: TimeInterval(endTime))
+        return (
+            samples,
+            SyncOutcome(type: .stress, fetched: samples.count, added: 0, highWater: now),
+            queriedStart,
+            queriedEnd
+        )
     }
 
     // MARK: - 窗口计算

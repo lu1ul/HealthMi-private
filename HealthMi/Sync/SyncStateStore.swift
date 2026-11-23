@@ -1,8 +1,9 @@
 import Foundation
+import CoreData
 import SwiftData
 import os
 
-/// 可同步的数据类型。stress 无 HealthKit 对应类型，存 App 内 SwiftData 展示。
+/// 可同步的数据类型。stress 无 HealthKit 对应类型，存 App 内展示。
 /// abnormal_heart_beat 暂不纳入。
 enum SyncDataType: String, CaseIterable, Identifiable, Sendable {
     case dailyActivity = "daily_activity"
@@ -32,7 +33,8 @@ enum SyncDataType: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
-/// 每类数据的同步游标（high-water mark）。
+/// iOS 17 旧库中的 SwiftData 同步游标模型，仅供迁移器读取。
+@available(iOS 17.0, *)
 @Model
 final class SyncState {
     @Attribute(.unique) var typeRawValue: String
@@ -49,50 +51,55 @@ final class SyncState {
     }
 }
 
-/// SwiftData 存取同步游标（必须在 MainActor 上使用，SwiftData 上下文非 Sendable）。
+/// Core Data 存取同步游标。
 @MainActor
 enum SyncStateStore {
 
-    static func state(for type: SyncDataType, in context: ModelContext) -> SyncState? {
-        let raw = type.rawValue
-        let descriptor = FetchDescriptor<SyncState>(
-            predicate: #Predicate { $0.typeRawValue == raw }
-        )
-        return (try? context.fetch(descriptor))?.first
+    static func state(for type: SyncDataType, in context: NSManagedObjectContext) throws -> SyncStateEntity? {
+        let request = SyncStateEntity.fetchRequest()
+        request.predicate = NSPredicate(format: "typeRawValue == %@", type.rawValue)
+        request.fetchLimit = 1
+        return try context.fetch(request).first
     }
 
-    static func ensureState(for type: SyncDataType, in context: ModelContext) -> SyncState {
-        if let existing = state(for: type, in: context) { return existing }
-        let created = SyncState(typeRawValue: type.rawValue)
-        context.insert(created)
+    static func ensureState(for type: SyncDataType, in context: NSManagedObjectContext) throws -> SyncStateEntity {
+        if let existing = try state(for: type, in: context) { return existing }
+        let created = NSEntityDescription.insertNewObject(
+            forEntityName: "SyncStateEntity", into: context
+        ) as! SyncStateEntity
+        created.typeRawValue = type.rawValue
+        created.lastAddedCount = 0
         return created
     }
 
     static func record(
-        type: SyncDataType, highWater: Date?, added: Int, in context: ModelContext
-    ) {
-        let state = ensureState(for: type, in: context)
+        type: SyncDataType, highWater: Date?, added: Int, in context: NSManagedObjectContext
+    ) throws {
+        let state = try ensureState(for: type, in: context)
         state.lastSyncedEnd = highWater
         state.lastSyncAt = Date()
-        state.lastAddedCount = added
+        state.lastAddedCount = Int64(added)
         do {
             try context.save()
         } catch {
             AppLog.syncStateStore.error("保存同步游标失败 (\(type.rawValue))：\(error.localizedDescription)")
+            context.rollback()
+            throw error
         }
     }
 
     /// 清除所有同步游标（退出登录或切换账号时调用，防止新账号继承旧进度）。
-    static func clearAll(in context: ModelContext) {
-        let descriptor = FetchDescriptor<SyncState>()
+    static func clearAll(in context: NSManagedObjectContext) {
+        let request = SyncStateEntity.fetchRequest()
         do {
-            let all = try context.fetch(descriptor)
+            let all = try context.fetch(request)
             for state in all {
                 context.delete(state)
             }
             try context.save()
         } catch {
             AppLog.syncStateStore.error("清除同步游标失败：\(error.localizedDescription)")
+            context.rollback()
         }
     }
 }
