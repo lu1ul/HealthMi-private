@@ -23,7 +23,9 @@ Free 套餐另含 **500 MB Actions artifact 存储**，与 GitHub Packages 共�
 
 如果目标是**可在真机安装或分发**的 IPA，需要有效的 Apple 签名身份和与 App ID 匹配的 provisioning profile。HealthMi 声明了 HealthKit entitlement，因此所用 App ID/profile 也必须具有匹配的 HealthKit 能力。签名证书、私钥和 profile 应通过 GitHub Actions Secrets 安全提供，不应提交到 Git 仓库。模拟器构建成功本身不代表生成了可分发的设备 IPA。
 
-## 对本仓库的检查
+## 首轮检查快照（安装 GitHub CLI 前）
+
+以下记录描述首次调查时的仓库状态；账号连接和后续实施进展见文末的当前实施记录。
 
 - 仓库当前的 `origin` 指向上游 `https://github.com/ShawnDiego/HealthMi.git`。向 `origin` 推送会指向上游，因此不要用 `git push origin ...` 来发布个人副本。
 - 当前工作环境没有安装 GitHub CLI（`gh`），也未完成 GitHub 账号认证；我还没有连接到你的 GitHub 账号。
@@ -75,7 +77,7 @@ git push -u personal main
 - **GitHub Desktop**：适合偏好图形界面的用户，可以在应用内登录并使用浏览器授权。但当前本地仓库的 `origin` 已指向上游；GitHub Desktop 官方“发布现有项目”流程要求先移除已有 remote，因此不适合直接照该流程发布。需要保留 `origin` 时，应给个人仓库单独添加 `personal`。
 - **Git Credential Manager**：适合只需要通过 HTTPS 执行普通 Git 操作的用户。它能管理 Git 凭据，但后续查询私有仓库设置或 Actions 仍需要 GitHub CLI、网页或 Desktop。
 
-对当前仓库，`gh` 是最合适的方式：一次浏览器登录后，终端 Git 与后续 Actions 管理都能使用它。当前环境尚未安装 `gh`，也没有登录任何 GitHub 账号。
+首轮调查认为 `gh` 最适合当前终端工作流。之后已安装 GitHub CLI 并登录，当前账号和私有仓库选择见文末的当前实施记录。
 
 ## 构建工作流大致步骤
 
@@ -116,3 +118,35 @@ git push -u personal main
 ## 资料适用范围
 
 GitHub 的套餐、额度和 runner 名称可能调整，实际执行前以 GitHub 当前计费页面和账户页面为准。Apple 的签名方式也取决于目标分发渠道（开发设备、Ad Hoc、TestFlight 或 App Store）；工作流应针对目标渠道选择相应的导出方法和 profile。
+
+## 当前实施记录（2026-11-23）
+
+### 仓库与账号
+
+- GitHub CLI 已连接账号 `lu1ul`；Git HTTPS 凭据由 GitHub CLI 管理。
+- 账号中已有公开仓库 `lu1ul/HealthMi`。用户选择保留该公开仓库，并另建私有仓库 `lu1ul/HealthMi-private`。
+- 本地 `origin` 继续指向上游 `https://github.com/ShawnDiego/HealthMi.git`；上传时使用独立的 `personal` remote。
+- 上传的内容来自已提交的 Git 历史。未跟踪的分析笔记不在提交历史中，不会随分支推送。
+- 推送前检查了当前提交：没有被跟踪的 `.env`、凭据配置、证书或私钥文件，也没有匹配常见 GitHub token、AWS key 或 PEM 私钥格式的文本。
+
+### 无签名 IPA 构建方案
+
+- GitHub Actions 使用 macOS 托管 runner；在 runner 上通过 Homebrew 安装 XcodeGen，从 `project.yml` 重新生成工程，再针对 `generic/platform=iOS` 构建 `HealthMi` target。项目配置为 Swift 6、iOS 16，当前 Bundle Identifier 是 `com.healthmi.HealthMi`。
+- 构建设置关闭代码签名（`CODE_SIGNING_ALLOWED=NO`、`CODE_SIGNING_REQUIRED=NO`），然后把设备构建产物 `HealthMi.app` 放进 IPA 标准目录结构 `Payload/HealthMi.app` 并压缩为 `HealthMi-unsigned.ipa`。工作流不接收、不保存 Apple 证书、私钥或 provisioning profile。
+- 该文件是待签名的 IPA 容器，不是 Xcode 已签名的分发导出包，不能直接安装运行。用户需使用自己的 Apple 开发团队和匹配的 provisioning profile 对 App 重新签名；若团队没有注册 `com.healthmi.HealthMi`，应在手动触发工作流时填写自己已注册的 Bundle Identifier。App ID/profile 还必须启用 HealthKit 能力。
+- 触发方式为向 `main` 推送 App 源码、工程配置或工作流文件，或手动触发 `Build unsigned IPA`。构建产物通过 Actions artifact 保存，下载后得到 `HealthMi-unsigned.ipa`。
+- 按 GitHub 官方 release API 查询，记录当前工作流使用的 `actions/checkout` 主版本 7 和 `actions/upload-artifact` 主版本 7。依赖版本可能更新，升级前应核对官方 Action release 与迁移说明。
+
+### 阶段记录
+
+- 研究结论：Apple 的官方分发文档介绍了 archive、签名和导出 IPA 的常规流程；官方资料没有明确承诺“完全禁用签名后由 Xcode 导出 IPA”。因此本方案仅构建未签名的设备 `.app`，再由工作流按 `Payload/` 结构打包，并明确要求用户后续签名。
+- 当前实施状态：私有仓库创建、工作流提交、GitHub Actions 构建和 artifact 下载结果待更新。
+
+### 官方资料补充
+
+- [GitHub-hosted runners](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)：GitHub 托管 runner 与操作系统选择。
+- [Workflow artifacts](https://docs.github.com/en/actions/concepts/workflows-and-actions/workflow-artifacts)：上传、保留和下载 Actions 构建产物。
+- [`actions/checkout` releases](https://github.com/actions/checkout/releases)：检出 Action 的版本记录。
+- [`actions/upload-artifact` releases](https://github.com/actions/upload-artifact/releases)：artifact 上传 Action 的版本记录。
+- [Apple：Export an iOS, tvOS, or watchOS app](https://help.apple.com/xcode/mac/current/en.lproj/dev23ea8b877.html)：Xcode archive 的标准签名导出流程。
+- [Apple：What is app signing?](https://help.apple.com/xcode/mac/current/en.lproj/dev3a05256b8.html)：代码签名、App ID 和 provisioning profile 的作用。
