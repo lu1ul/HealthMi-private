@@ -120,3 +120,4 @@ HealthKit 在模拟器中的可用性和真实设备不同；模拟器启动检�
 - 新系统复测：[GitHub Actions 运行 `45149953346`](https://github.com/lu1ul/HealthMi-private/actions/runs/45149953346) 成功。runner 默认使用 iPhone 16 Pro、iOS 18.5 runtime；构建、安装和 launch 均通过，20 秒后应用进程仍在，未生成 HealthMi 崩溃报告。
 - 结论：弱链接配置解决了 iOS 16.4 上 dyld 因缺少 SwiftData.framework 而退出的问题，并保留了较新系统上的正常启动。此次没有用含真实 SwiftData 旧库的数据验证迁移，也没有测试用户签名后的 IPA 或 iOS 16.3 真机。
 - 两次 artifact 下载到忽略目录 `build/ios16.4-diagnostics-fixed/` 和 `build/runner-default-diagnostics/`；不纳入 Git。
+- iOS 16 弱链接修复提交也自动生成了 Release 设备版未签名 IPA，运行 `45148687288` 成功；本地文件及 SHA-256 见《GitHub Actions iOS IPA 构建与仓库连接说明.md》。该 IPA 没有嵌入签名和 profile，必须由用户自行签名后再安装。

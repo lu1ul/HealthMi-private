@@ -94,4 +94,5 @@
 - 验证通过：GitHub Actions 运行 `45148900597` 在 Xcode 16.4 / iPhone 14 / iOS 16.4 成功构建、安装和启动，20 秒后进程仍存活；日志确认有弱链接参数且没有崩溃报告。运行 `45149953346` 在 iPhone 16 Pro / iOS 18.5 也成功构建并启动，20 秒后进程仍存活。
 - 这次诊断只提取了崩溃类型、DYLD 终止原因及相关镜像名，没有读取健康记录。仍需在有真实旧 SwiftData 库的数据上验证迁移；模拟器启动成功不证明 iOS 16.3 真机或最终签名 IPA 的所有行为。
 - 本地提交：诊断结论 `6144017 docs: record iOS 16 simulator crash cause`；弱链接修复 `82fef0f fix: weak link SwiftData for iOS 16`；复测结果本次单独提交。
+- 设备版构建验证：修复提交的 push 还触发了 Release IPA 工作流，运行 `45148687288` 成功，生成未签名 IPA。文件 SHA-256 为 `88198DBF1A140E88553CC9A6B2B7584127456888EF23264F5DA80E6027083716`；包内无 `_CodeSignature` 和 provisioning profile。文件位于忽略的 `build/HealthMi-unsigned-ipa-after-ios16-fix/`，需用户用自己的证书签名。
 - 资料：[Apple Xcode Build Settings Reference](https://developer.apple.com/documentation/xcode/build-settings-reference)、[Apple Frameworks and Weak Linking](https://developer.apple.com/library/archive/documentation/MacOSX/Conceptual/BPFrameworks/Concepts/WeakLinking.html)。

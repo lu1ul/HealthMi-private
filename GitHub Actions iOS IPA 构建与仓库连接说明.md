@@ -151,6 +151,14 @@ GitHub 的套餐、额度和 runner 名称可能调整，实际执行前以 GitH
 - GitHub artifact 设为保留 7 天，当前记录的过期时间为 2026-11-30 07:42 UTC；本地副本不受该期限影响。
 - 当前实施状态：私有仓库和工作流已部署，IPA 已成功构建、下载并完成包结构检查；未运行 XCTest。`origin` 仍指向原仓库，未向其推送。
 
+### iOS 16 弱链接修复后的 IPA
+
+- 提交 `82fef0fbee8def00fd00f94b58af6bc4f5e19354` 推送到个人私有仓库后，`Build unsigned IPA` 自动运行并成功：[GitHub Actions 运行 `45148687288`](https://github.com/lu1ul/HealthMi-private/actions/runs/45148687288)。
+- 已下载新版 IPA 到 `build/HealthMi-unsigned-ipa-after-ios16-fix/HealthMi-unsigned-ipa/HealthMi-unsigned.ipa`。文件大小 1,707,079 字节，SHA-256：`88198DBF1A140E88553CC9A6B2B7584127456888EF23264F5DA80E6027083716`。
+- ZIP 静态检查确认包含 `Payload/HealthMi.app/Info.plist`，共 15 个条目；没有 `_CodeSignature` 或 `embedded.mobileprovision`，符合未签名 IPA 的预期。此文件需要用户使用自己的开发者证书和 profile 签名后再安装。
+- 该 IPA 对应的工作流提交 SHA 为 `82fef0f...`，包含 SwiftData 弱链接修复；此前 `45133048012` 生成的 IPA 是修复前旧版本，不应再用于 iOS 16 闪退验证。
+- 本地构建文件位于 Git 忽略的 `build/` 目录，不纳入源码提交；本段记录随本地文档提交保存。
+
 ### 官方资料补充
 
 - [GitHub-hosted runners](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)：GitHub 托管 runner 与操作系统选择。
