@@ -50,7 +50,7 @@
 - 更新现有游标存储测试，并增加压力范围替换、畸形压力数据拒绝、SwiftData 导入重试幂等及源库保留检查。
 - 静态验证：搜索确认运行时视图不再使用 `@Query`、typed environment、`@Bindable` 或 `ContentUnavailableView`；Core Data 新源文件已加入显式 Xcode 工程；`git diff --check` 无空白错误。
 - 构建/测试验证：已尝试 `xcodegen generate` 和 `xcodebuild test -project "HealthMi.xcodeproj" -scheme "HealthMi" -destination "generic/platform=iOS Simulator"`，两者均因当前 Windows 主机没有对应 Apple 工具而无法启动；`swift` 同样不可用，不能在此编译或运行 XCTest。
-- 本地 commit：将在阶段 3 记录。
+- 本地 commit：`565cd71 feat: adapt HealthMi storage for iOS 16`。
 
 ### 阶段 2：部署目标、项目配置与说明
 
@@ -58,12 +58,14 @@
 - 更新 README 的最低系统版本、存储方案与迁移行为。
 - 静态验证：`project.yml` 和 `project.pbxproj` 中可见部署版本均为 16.0；README 已注明最低版本和旧数据迁移策略。
 - 构建验证：无法在当前 Windows 环境执行；需在 macOS 运行 `xcodegen generate`，再构建 iOS 16 模拟器目标。
-- 本地 commit：将在阶段 3 记录。
+- 本地 commit：`565cd71 feat: adapt HealthMi storage for iOS 16`。
 
 ### 阶段 3：最终核查
 
 - 检查 iOS 17 API 是否仅用于旧库迁移或已由 iOS 16 可用组件替代；检查压力查询范围、失败回滚、迁移标记与改动文件清单。
-- 待完成：工作区差异与工程文件结构复核；本地提交；提交后确认原有分析文档仍未改动、未提交且远程无 push。
+- 静态核查：提交前 `git diff --check` 通过；部署版本检查结果为 `project.yml` 与 `project.pbxproj` 均为 16.0；旧分析文档没有出现在暂存清单中。
+- 本地 commit：实施代码与配置为 `565cd71 feat: adapt HealthMi storage for iOS 16`；本阶段最终核查记录随本地文档提交保存。
+- 远程状态：本地提交，没有执行 push；原有未跟踪的 `项目分析-优先关注问题.md` 仍保留在工作区。
 - macOS 后续验收：执行 `xcodegen generate`、iOS 16 部署目标构建及现有 XCTest；在 iOS 17 旧版安装数据上验证三类 SwiftData 数据导入、重试幂等和旧库保留；在 iOS 16 模拟器或真机验证新安装核心功能。
 - 本地 commit：待补充。
 
@@ -80,5 +82,6 @@
 - [Apple SwiftUI `FetchRequest` 文档](https://developer.apple.com/documentation/swiftui/fetchrequest)
 - [Apple SwiftData `ModelContainer` 文档](https://developer.apple.com/documentation/swiftdata/modelcontainer)
 - [Apple SwiftData `ModelConfiguration.url` 文档](https://developer.apple.com/documentation/swiftdata/modelconfiguration/url)
+- [Apple `NSPersistentStoreDescription.shouldAddStoreAsynchronously` 文档](https://developer.apple.com/documentation/coredata/nspersistentstoredescription/shouldaddstoreasynchronously)
 - [Apple HealthKit `HKWorkoutBuilder` 文档](https://developer.apple.com/documentation/healthkit/hkworkoutbuilder)
 - [WWDC22：What’s new in Swift](https://developer.apple.com/videos/play/wwdc2022/110354/)
