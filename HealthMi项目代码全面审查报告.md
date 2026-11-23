@@ -37,6 +37,12 @@ HealthKit 调用失败时，仪表盘按钮通过 `try?` 丢弃错误，所以�
 
 本轮又确认：HealthKit 批量写入前只过滤数据库中已有的 external UUID，没有在本次批次内部去重；分页游标直接插入 JSON 字符串，特殊字符可能破坏请求；CSV 导出接口的 `days` 参数目前未使用。这些属于同步完整性和接口契约问题，不解释授权表单缺失。
 
+补充检查登录与工作流后还发现：网页登录 Cookie 域名采用子串匹配；更换凭据或退出登录不会中止正在执行的同步；同步中可修改区域和回填天数，导致同一轮任务的输入配置变化；模拟器诊断工作流的启动失败可能仍显示绿色，且 CI 没有执行 XCTest。
+
+回填窗口另有一个按日期计数的边界问题：界面选 N 天时，当前起点计算会包含 N+1 个日历日期，现有窗口测试只验证相差天数而没有验证实际日期数。
+
+解析层还把缺失的 `item.time` 默认为 Unix 时间戳 0；若心率、体重或日活动记录缺少时间字段，可能生成并写入 1970 年附近的 HealthKit 样本，而不是拒绝不完整记录。
+
 但“没有弹窗”本身不能证明 entitlement 缺失：Apple 说明，如果这组数据类型之前都已被用户处理过，后续 `requestAuthorization` 可以直接返回而不再显示表单。另一方面，Apple 也说明完成授权请求后，应用会出现在“健康”App 的“来源”页，即使用户拒绝所有权限。因而还要确认手机上检查的是“健康”App 的来源列表、当前安装包的 Bundle ID，以及实际安装二进制的签名 entitlement；仅凭 TrollStore 能安装和启动，无法证明这些权限配置正确。[Apple：`requestAuthorization`](https://developer.apple.com/documentation/healthkit/hkhealthstore/requestauthorization%28toshare%3Aread%3Acompletion%3A%29)
 
 ## 二、HealthKit 权限按钮的实际调用链
@@ -346,6 +352,64 @@ Swift App 映射为 `2=deep, 3=light, 4=REM, 5=awake`；Python MCP 工具映射�
 
 **建议：**若筛选由调用方负责，删除未使用的 `days` 参数并在调用点明确传入已筛选数据；若函数负责范围，则用 `days` 对趋势和压力记录统一裁剪。
 
+#### S24｜P2：网页登录用子串匹配信任 Cookie 域名
+
+**位置：** `HealthMi/MiFitness/MiWebLogin.swift:20-31`；WebView 导航见 `HealthMi/App/MiWebLoginView.swift:124-125, 173-181, 209-216`；相关测试 `HealthMiTests/MiWebLoginTests.swift:45-70`。
+
+Cookie 提取条件是 `$0.domain.contains("account.xiaomi.com")`，而不是检查规范化后的域名是否为 `account.xiaomi.com` 或其合法子域。WebView 控制器把 `target=_blank` 也加载到同一个 WebView，未限制目标主机；如果浏览到 `account.xiaomi.com.attacker.example` 一类域名，该域也满足子串检查。该页面可设置同名 Cookie；`getAllCookies()` 会把多域名 Cookie 一并交给提取器，而代码会按返回顺序选取同名项。当前测试仅排除了完全不相关的 `example.com`，没有覆盖域名后缀伪装和同名 Cookie 冲突。
+
+**影响：**登录流程可能捕获并提交非小米账号域的伪造 `userId` / `passToken`，造成登录失败或凭据来源混淆。此问题需要用户被引导到或主动打开伪装域名才会触发；本轮没有验证实际 WebView 导航路径。
+
+**建议：**规范化 Cookie domain（去掉前导点、转小写），按域名标签边界做精确匹配；若仅需要登录主机，就只接受 `account.xiaomi.com`。同时限制 WebView 的外部导航，并增加 `account.xiaomi.com.attacker.example`、`notaccount.xiaomi.com` 及重复同名 Cookie 的测试。
+
+#### S25｜P2：退出或更换小米账号不会取消正在运行的同步
+
+**位置：** `HealthMi/App/AppModel.swift:95-119, 184-263`；`HealthMi/App/DashboardView.swift:63-67, 224-227`。
+
+`syncAll` 只保存一个跨实例互斥标志，没有保留可供 `disconnect` 取消的同步任务句柄；`disconnect` 会清凭据、把 `engine` 设为 `nil` 并清除游标/压力/日志，但不会取消已进入网络请求或 HealthKit 写入的任务。仪表盘的“更新小米凭据”和“退出登录”按钮在同步期间仍可用。若同步在 `await engine?.sync(...)` 处暂停，切换凭据可以替换 `self.engine`；当前类型的旧引擎调用仍可完成，后续类型则可能改用新引擎，而两者写入同一 HealthKit 库和同一 Core Data 游标。
+
+**影响：**单次同步可能混合旧账号与新账号的数据；退出后，仍在途的任务也可能继续写 HealthKit，并把刚清空的游标、压力或日志重新写回。该情况依赖用户在同步过程中执行退出/换号，但代码没有互斥或取消保护。
+
+**建议：**同步期间禁用换号/退出操作，或在执行账号变更前取消并等待当前任务结束；每轮同步捕获不可变的 engine、账号标识和配置快照，在保存游标前验证账号代次未变化。覆盖“网络请求期间退出”和“两个数据类型之间切换账号”场景。
+
+#### S26｜P2：同一轮同步可以使用不同的区域或回填天数
+
+**位置：** `HealthMi/App/AppModel.swift:209-214`；`HealthMi/App/DashboardView.swift:47-50, 122-129`；`HealthMi/MiFitness/MiAPIClient.swift:24-27, 94-103`；`HealthMi/Sync/SyncEngine.swift:64-82`。
+
+数据类型列表在 `syncAll` 开始时会快照，但 `backfillDays` 在每个类型开始时重新读取；设置页的回填范围和区域 Picker 在同步时没有禁用。与此同时，`MiAPIClient.baseURL` 每次请求都会读取当前 `MiRegion.current`。因此长时间同步中修改区域或回填范围后，同一轮任务的后续数据类型可以换到另一区域/时间范围；时区/日界线也可能与前面已完成的类型不同。
+
+**建议：**在同步开始时一次性捕获区域、时区、回填天数、类型集合及账号会话，并将快照传入该轮所有请求；或者同步期间禁用相关设置控件。日志记录实际使用的配置，便于复现跨区域和部分回填问题。
+
+#### S27｜P3：单类同步部分写入失败时，错误日志固定记录零条
+
+**位置：** `HealthMi/App/AppModel.swift:236-260`；分组保存见 `HealthMi/Sync/SyncEngine.swift:85-120, 228-253`。
+
+一个同步类型可能包含多个 HealthKit sample group，或逐条保存多个 workout。前面组/运动已成功写入后，后续操作抛错会进入 `AppModel` 的统一 catch；该分支不读取已经完成的工作，固定以 `fetched: 0, added: 0` 写失败日志。压力路径也可能先完成 `replaceRange`，之后保存游标失败，再写一条零计数失败日志。
+
+**影响：**HealthKit 或 Core Data 中可能已有部分新数据，但同步历史显示“拉取 0、新增 0”，使用户无法区分纯失败和部分成功；重试虽通常可由 external UUID 或范围替换收敛，但日志不能反映真实结果。
+
+**建议：**让同步结果/错误携带已获取和已提交计数，并显式标记部分成功；或把每类数据的写入阶段和日志状态设计成可恢复的步骤。覆盖“前一组成功、后一组失败”和“数据已保存、游标保存失败”。
+
+#### S28｜P2：回填“最近 N 天”实际覆盖 N+1 个日历日期
+
+**位置：** `HealthMi/Sync/SyncEngine.swift:64-82, 140-165`；界面选项见 `HealthMi/App/DashboardView.swift:122-129`；现有窗口测试 `HealthMiTests/SyncEngineTests.swift:26-33`。
+
+首次同步和强制回填都先用 `Calendar.current.date(byAdding: .day, value: -backfillDays, to: now)` 计算起点，之后 API 查询再把起点向下取到区域日历的 00:00，并将今天的日终作为结束。以“7 天”为例，当前会从 7 天前那一天的 00:00 拉到今天，覆盖 7 天前至今天共 8 个日历日期；30 天和 90 天同理多一天。现有测试只检查起点距 `now` 约 N 天，不检查窗口实际包含的日期数量。
+
+**影响：**UI 和同步历史的“7/30/90 天”范围比用户选择多一个日历日，额外下载并在强制回填时重写该日的数据。若产品定义本来就是“今天加上前 N 天”，则应把标签改成该含义；当前界面称“最近 N 天”，更自然的解释是总共 N 个日期。
+
+**建议：**明确采用“最近 N 个日历日（含今天）”还是“今天加前 N 天”；前者通常从今天的日历起点向前减 `N-1` 天。测试应固定时区与日期，断言查询起止日期及覆盖日期数，而非仅断言时间差。
+
+#### S29｜P2：缺失的记录时间被转换成 1970 年样本
+
+**位置：** `HealthMi/MiFitness/MiParser.swift:31-42, 130-145, 231-239, 293-301`。
+
+`recordDate(of:)` 和 `calendarDay(of:)` 都用 `item.time ?? 0` 填补缺失时间；静息心率解析也使用 `payload.date_time ?? item.time ?? 0`。因此 API 返回记录缺少时间字段时，心率、体重或日活动的其它有效数值不会被跳过，而可能被解析成 Unix epoch 附近的时间。`TypeMapper` 对心率/体重样本没有时间合理性校验，日活动则会按区域把 1970-01-01 映射为整日样本。若错误时间来自 `MiJSON.int` 对非法数字文本的兜底 0，也会出现相同结果（另见 S2）。
+
+**影响：**不完整 API 响应可能污染 Apple 健康的历史时间线；HealthKit 写入成功后，正常 external UUID 去重还会让错误时间样本长期保留。
+
+**建议：**让时间解析返回可失败结果；缺少必要时间字段的记录应跳过并计入解析告警，或使该页失败且不推进同步游标。增加缺少 `item.time`、非法时间文本、合法 Unix epoch 附近数据的边界测试。
+
 ### C. 仓库内 Python MCP/CLI 参考工具
 
 此目录是独立的 Python 小米运动健康同步/MCP 工具，不是 iOS App HealthKit 弹窗的直接调用链；以下问题不会解释 iPhone 上权限列表没有 HealthMi。
@@ -416,6 +480,44 @@ Swift App 映射为 `2=deep, 3=light, 4=REM, 5=awake`；Python MCP 工具映射�
 
 当前单元测试通过内存 SwiftData 容器调用 `importRecords` 验证记录字段、幂等标记和旧库保留，但没有用**历史版本实际落盘的默认 SwiftData store**执行启动升级测试。这个仍是验证缺口，不能仅凭内存导入测试断言真实升级路径已在 iOS 17 用户数据上成功。
 
+### F. GitHub Actions 与测试覆盖
+
+#### CI1｜P2：模拟器诊断失败后工作流仍可能判为成功
+
+**位置：** `.github/workflows/diagnose-simulator-startup.yml:131-133, 207-219`。
+
+“Install, launch, and collect diagnostics” 步骤设置了 `continue-on-error: true`，目的是让失败后仍上传诊断 artifact。下一步在 `steps.diagnose.outcome == 'failure'` 时只输出 `echo "::error::..."`，shell 仍以退出码 0 结束；因此诊断步骤失败可能只留下红色注释，整个 job 仍为成功状态。GitHub 文档说明 `continue-on-error` 会让失败步骤不导致 job 失败；`::error::` 是注释/日志命令，不是失败退出码。
+
+**建议：**保留 artifact 上传，再在最后的结果步骤显式 `exit 1`，或用 job-level `continue-on-error`/结果汇总结构确保“诊断失败但日志已上传”仍以失败结论结束。
+
+#### CI2｜P2：现有 CI 工作流没有运行 XCTest
+
+**位置：** `.github/workflows/build-unsigned-ipa.yml:28-88`；`.github/workflows/diagnose-simulator-startup.yml:116-220`。
+
+IPA 工作流只对 generic iOS 目标执行 `xcodebuild build`；模拟器工作流也只 build、install、launch 并采集日志。仓库虽有 `HealthMiTests` 测试 target，但两条工作流都没有 `xcodebuild test`。目前因此没有自动回归门槛覆盖解析、映射、同步游标、Core Data 导入等现有单元测试。
+
+**建议：**在可用的 iOS Simulator workflow 中运行 `xcodebuild test`，并保留启动诊断工作流；同时将 iOS 17 默认 SwiftData store 升级、HealthKit 写入/删除失败、分页错误、账号切换、取消和回填数据一致性纳入测试计划。当前静态审查不运行测试，因此这些建议没有在本轮执行。
+
+**测试覆盖观察：**现有 `SyncEngineTests` 只验证窗口计算，且没有发现 S28 的 N+1 日问题；没有测试 API 分页字段校验、缺失记录时间、HealthKit 写入/回填或账号切换竞态。`TypeMapperTests` 的日活动期望值与 `MiParserTests` 一起断言 `activeKcal == 210`，会让 S15 的总卡路里映射问题通过；睡眠分期测试没有覆盖状态 3 和未知状态；`MiCryptoTests.testDataStringOrder` 只用普通游标 `abc`，没有覆盖 S22 的 JSON 转义边界。
+
+### G. README 与实现的差异
+
+#### DOC1｜P2：README 将后台刷新描述成每小时执行
+
+**位置：** `README.md:12, 116`；调度代码 `HealthMi/Sync/BackgroundSync.swift:39-47`；Apple 的 [`BGTaskRequest.earliestBeginDate`](https://developer.apple.com/documentation/backgroundtasks/bgtaskrequest/earliestbegindate) 文档。
+
+代码把 `earliestBeginDate` 设为一小时后，然后提交 `BGAppRefreshTaskRequest`。该值表示系统不应在此时间前启动任务，并不构成每小时准时运行的承诺；任务运行时间由 iOS 后台调度器决定。README 的“每小时周期刷新”容易被理解为固定周期，特别是首次安装或用户划掉 App 后更容易误判为同步失效。
+
+**建议：**将文案改为“系统可能在一小时后或更晚安排后台刷新，时间不保证；需要确定性同步时使用 App 内手动同步或快捷指令”。
+
+#### DOC2｜P3：README 声称存在的 `MiRegionTests` 不在测试 target 中
+
+**位置：** `README.md:123-125`；测试文件清单 `HealthMiTests/`。
+
+README 的测试说明称 `MiRegionTests` 验证区域配置，但仓库当前没有 `MiRegionTests.swift` 或相应测试类。现有测试 target 中也没有区域时区、日界线或区域切换的测试。
+
+**建议：**补上对应测试并将其纳入 CI，或移除 README 中对该测试的描述，避免读者误以为区域配置已被自动验证。
+
 ## 六、修复与验证建议
 
 ### 第一优先级：确认最终安装包的 entitlement
@@ -478,6 +580,10 @@ plutil -p /tmp/healthmi-check/Payload/HealthMi.app/Info.plist
 - 2026-11-23 继续静态审查代码基线 `82fef0f`，补充核对 Swift/Python 卡路里与睡眠分期差异、HealthKit 睡眠区间统计、快捷指令取消和后台任务完成竞态；本轮另有独立只读复核确认，本地 unsigned IPA 主可执行文件没有 `LC_CODE_SIGNATURE`。这仍不能证明用户手机上的最终安装包经过后处理后缺少 entitlement。
 - 后续静态检查继续覆盖增量日活动更新、强制回填与 workout 心率关联、API 分页字段校验、Swift 数值转换、跨区域请求时区、MCP 敏感输出及 SQLite 连接生命周期；这些均为代码阅读结论，尚未运行对应回归场景。
 - 本轮补充核对批次内 external UUID 去重、分页游标 JSON 编码和 CSV 导出参数；确认其为静态可见的实现缺口，但相关服务端重复页/特殊游标及 HealthKit 对重复批次的行为没有真实样本或运行证据。
+- 本轮审查网页登录 Cookie 域校验、同步过程中的账号/配置变化、部分失败日志以及 GitHub Actions 诊断与测试步骤；CI 结论来自工作流 YAML 静态检查，未触发 GitHub Actions。
+- 另复核首次/强制回填窗口与界面天数选项，确认 N 天参数向下取整后包含 N+1 个日历日期；此结论为静态计算，未运行 API 请求。
+- 另复核解析器对缺失时间戳的默认路径，确认若记录数值字段有效但 `item.time` 缺失，会产生 1970 年附近的样本时间；没有使用真实服务端异常响应验证发生频率。
+- 另核对 README 中的后台刷新承诺及测试清单，发现“每小时”措辞高估 iOS 调度保证、且引用了仓库中不存在的 `MiRegionTests`。
 - 本轮没有运行构建、测试或 GitHub runner；没有修改业务代码，未改变仓库可见性，未 push。`项目分析-优先关注问题.md` 未跟踪文件保持未暂存、未修改。
 
 ## 八、参考资料
@@ -490,6 +596,9 @@ plutil -p /tmp/healthmi-check/Payload/HealthMi.app/Info.plist
 - Apple：[HKQuery `predicateForSamples`](https://developer.apple.com/documentation/healthkit/hkquery/predicateforsamples(withstart:end:options:))——样本查询的时间范围可按样本与区间相交来匹配，计算边界区间总时长时需明确裁剪策略。
 - Apple：[HKQueryOptions](https://developer.apple.com/documentation/healthkit/hkqueryoptions)——`strictStartDate` 与 `strictEndDate` 分别要求样本起始/结束时间落在目标区间内。
 - Apple：[BGTask `expirationHandler`](https://developer.apple.com/documentation/backgroundtasks/bgtask/expirationhandler) 与 [`setTaskCompleted(success:)`](https://developer.apple.com/documentation/backgroundtasks/bgtask/settaskcompleted(success:))——后台任务到期处理和完成状态的官方接口。
+- Apple：[BGTaskRequest `earliestBeginDate`](https://developer.apple.com/documentation/backgroundtasks/bgtaskrequest/earliestbegindate)——任务最早启动时间由请求指定，不等同于系统保证的实际启动时间。
+- GitHub：[Workflow syntax for GitHub Actions](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax)——`continue-on-error` 会影响失败步骤对 job 结果的传播。
+- GitHub：[Workflow commands for GitHub Actions](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-commands)——`::error::` 用于创建注释；需要非零退出状态或显式失败命令才能让步骤失败。
 - Swift 标准库：[`Int.init(_ source: Double)`](https://developer.apple.com/documentation/swift/int/init(_:))——浮点转整数要求输入值可由目标整数类型表示；对外部文本解析应先验证范围与有限性。
 - Python 标准库：[sqlite3 connection context manager](https://docs.python.org/3/library/sqlite3.html#how-to-use-the-connection-context-manager)——连接上下文管理器提交或回滚事务，但不会关闭连接。
 - TrollStore：[官方 README](https://github.com/opa334/TrollStore/blob/main/README.md)——用于核对其支持范围和 entitlement 处理方式；TrollStore 可处理带任意 entitlement 的应用，但安装成功本身并不证明 HealthKit entitlement 存在。
