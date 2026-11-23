@@ -2,6 +2,15 @@ name: Diagnose simulator startup
 
 on:
   workflow_dispatch:
+    inputs:
+      simulator_runtime:
+        description: 'Simulator OS for startup diagnostics'
+        required: true
+        type: choice
+        options:
+          - ios-16.4
+          - runner-default
+        default: ios-16.4
 
 permissions:
   contents: read
@@ -10,16 +19,50 @@ jobs:
   simulator-startup:
     name: Build, install, and launch in iOS Simulator
     runs-on: macos-15
-    timeout-minutes: 20
+    timeout-minutes: 45
 
     steps:
       - name: Check out source
         uses: actions/checkout@v7
 
-      - name: Show Xcode and available simulator devices
+      - name: Select Xcode and install requested simulator runtime
+        id: runtime
+        env:
+          SIMULATOR_RUNTIME: ${{ inputs.simulator_runtime }}
+        shell: bash
         run: |
-          xcodebuild -version
-          xcrun simctl list devices available
+          set -euo pipefail
+          diagnostic_dir="$GITHUB_WORKSPACE/build/simulator-diagnostics"
+          mkdir -p "$diagnostic_dir/crash-reports"
+
+          runtime_id=""
+          if [[ "$SIMULATOR_RUNTIME" == "ios-16.4" ]]; then
+            xcode_path="/Applications/Xcode_16.4.app/Contents/Developer"
+            if [[ ! -d "$xcode_path" ]]; then
+              echo "::error::Xcode 16.4 is not installed on this runner."
+              exit 1
+            fi
+            sudo xcode-select -s "$xcode_path"
+            runtime_id="com.apple.CoreSimulator.SimRuntime.iOS-16-4"
+            xcodebuild -version 2>&1 | tee "$diagnostic_dir/xcode-version.txt"
+            if ! xcodebuild -downloadPlatform iOS -buildVersion 16.4 2>&1 \
+              | tee "$diagnostic_dir/runtime-download.log"; then
+              xcrun simctl list runtimes available 2>&1 \
+                | tee "$diagnostic_dir/available-runtimes.txt"
+              exit 1
+            fi
+          elif [[ "$SIMULATOR_RUNTIME" == "runner-default" ]]; then
+            xcodebuild -version 2>&1 | tee "$diagnostic_dir/xcode-version.txt"
+          else
+            echo "::error::Unsupported simulator runtime input: $SIMULATOR_RUNTIME"
+            exit 1
+          fi
+
+          xcrun simctl list runtimes available 2>&1 \
+            | tee "$diagnostic_dir/available-runtimes.txt"
+          xcrun simctl list devices available 2>&1 \
+            | tee "$diagnostic_dir/available-devices.txt"
+          echo "runtime_id=$runtime_id" >> "$GITHUB_OUTPUT"
 
       - name: Install XcodeGen
         run: brew install xcodegen
@@ -29,36 +72,41 @@ jobs:
 
       - name: Select an available iPhone simulator
         id: simulator
+        env:
+          SIMULATOR_RUNTIME_ID: ${{ steps.runtime.outputs.runtime_id }}
         shell: bash
         run: |
           set -euo pipefail
           simulator_json="$(xcrun simctl list devices available -j)"
-          simulator_udid="$(python3 -c '
+          selection="$(python3 -c '
           import json, sys
+          requested_runtime = sys.argv[1]
+          devices_by_runtime = json.load(sys.stdin)["devices"]
           devices = [
               device
-              for runtime_devices in json.load(sys.stdin)["devices"].values()
+              for runtime_id, runtime_devices in devices_by_runtime.items()
               for device in runtime_devices
-              if device.get("isAvailable") and device["name"].startswith("iPhone")
+              if device.get("isAvailable")
+              and device["name"].startswith("iPhone")
+              and (not requested_runtime or runtime_id == requested_runtime)
+              and (not requested_runtime or device["name"] == "iPhone 14")
           ]
           if not devices:
+              if requested_runtime:
+                  raise SystemExit(f"No iPhone 14 simulator is available for runtime {requested_runtime}")
               raise SystemExit("No available iPhone simulator was found")
           devices.sort(key=lambda device: ("Pro" not in device["name"], device["name"]))
-          print(devices[0]["udid"])
-          ' <<< "$simulator_json")"
-          simulator_name="$(python3 -c '
-          import json, sys
-          udid = sys.argv[1]
-          for runtime_devices in json.load(sys.stdin)["devices"].values():
-              for device in runtime_devices:
-                  if device["udid"] == udid:
-                      print(device["name"])
-                      raise SystemExit(0)
-          raise SystemExit("Selected simulator disappeared from the device list")
-          ' "$simulator_udid" <<< "$simulator_json")"
+          device = devices[0]
+          for runtime_id, runtime_devices in devices_by_runtime.items():
+              if any(candidate["udid"] == device["udid"] for candidate in runtime_devices):
+                  print("\t".join((device["udid"], device["name"], runtime_id)))
+                  break
+          ' "$SIMULATOR_RUNTIME_ID" <<< "$simulator_json")"
+          IFS=$'\t' read -r simulator_udid simulator_name simulator_runtime_id <<< "$selection"
           echo "udid=$simulator_udid" >> "$GITHUB_OUTPUT"
           echo "name=$simulator_name" >> "$GITHUB_OUTPUT"
-          echo "Selected simulator: $simulator_name ($simulator_udid)"
+          echo "runtime_id=$simulator_runtime_id" >> "$GITHUB_OUTPUT"
+          echo "Selected simulator: $simulator_name ($simulator_udid), runtime $simulator_runtime_id"
 
       - name: Build simulator app
         env:
@@ -87,6 +135,7 @@ jobs:
         env:
           SIMULATOR_UDID: ${{ steps.simulator.outputs.udid }}
           SIMULATOR_NAME: ${{ steps.simulator.outputs.name }}
+          SIMULATOR_RUNTIME_ID: ${{ steps.simulator.outputs.runtime_id }}
         run: |
           set -euo pipefail
           diagnostic_dir="$GITHUB_WORKSPACE/build/simulator-diagnostics"
@@ -95,8 +144,8 @@ jobs:
           test -d "$app_path"
           bundle_id="$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$app_path/Info.plist")"
 
-          printf 'simulator=%s\nudid=%s\nbundle_id=%s\n' \
-            "$SIMULATOR_NAME" "$SIMULATOR_UDID" "$bundle_id" \
+          printf 'simulator=%s\nudid=%s\nruntime_id=%s\nbundle_id=%s\n' \
+            "$SIMULATOR_NAME" "$SIMULATOR_UDID" "$SIMULATOR_RUNTIME_ID" "$bundle_id" \
             > "$diagnostic_dir/metadata.txt"
 
           xcrun simctl boot "$SIMULATOR_UDID" 2>&1 | tee "$diagnostic_dir/boot.txt" || true
