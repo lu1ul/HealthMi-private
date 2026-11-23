@@ -90,6 +90,6 @@
 
 - 运行 `45146100153` 使用 Xcode 16.4、iPhone 14、iOS 16.4 runtime；构建、安装和 launch 命令通过，但 20 秒后应用进程退出。
 - `.ips` 报告指出 dyld 在启动时找不到 `SwiftData.framework`，引用方为 `HealthMi.debug.dylib`。SwiftData 只用于 iOS 17+ 旧库导入，但 `import SwiftData` 仍让 framework 成为启动时强依赖；仅给迁移类型添加 `@available(iOS 17, *)` 不会解除该链接依赖。
-- 采用弱链接修复：设置 `SWIFT_SKIP_AUTOLINKING_FRAMEWORKS = SwiftData`，并将 `-weak_framework SwiftData` 加入 `OTHER_LDFLAGS`，让 iOS 16 可以加载 Core Data 主流程，同时在 iOS 17+ 保留旧库导入代码。Apple Build Settings Reference 记录了跳过 Swift framework 自动链接的配置；Apple Frameworks and Weak Linking 文档说明 `-weak_framework` 的用途。
-- 这次诊断只提取了崩溃类型、DYLD 终止原因及相关镜像名，没有读取健康记录。具体修复和重跑结果待后续实施记录。
+- 已在 XcodeGen 配置与当前工程的 Debug/Release 项目设置中加入 `SWIFT_SKIP_AUTOLINKING_FRAMEWORKS = SwiftData` 和 `-weak_framework SwiftData`。此配置用于让 iOS 16 加载 Core Data 主流程，同时保留 iOS 17+ 旧库导入代码。
+- 这次诊断只提取了崩溃类型、DYLD 终止原因及相关镜像名，没有读取健康记录。当前 Windows 环境没有 XcodeGen 或 Xcode，需通过 GitHub Actions 检查设置是否正确生成、构建并在 iOS 16.4 启动；验证结果待补充。
 - 资料：[Apple Xcode Build Settings Reference](https://developer.apple.com/documentation/xcode/build-settings-reference)、[Apple Frameworks and Weak Linking](https://developer.apple.com/library/archive/documentation/MacOSX/Conceptual/BPFrameworks/Concepts/WeakLinking.html)。
