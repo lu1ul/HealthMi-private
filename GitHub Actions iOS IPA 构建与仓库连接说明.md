@@ -35,17 +35,41 @@ Free 套餐另含 **500 MB Actions artifact 存储**，与 GitHub Packages 共�
 
 建议在自己的 GitHub 账号创建一个**私有**空仓库（例如 `HealthMi`），保留现有 `origin` 作为上游，再给个人仓库添加单独的 remote。这样上游和个人仓库的目标名称不同，推送时更容易确认目标。
 
-先通过 GitHub 网页创建私有空仓库。在安装了 GitHub CLI 的环境中，先运行 `gh auth login` 完成登录，再执行：
+### 推荐方式：GitHub CLI（`gh`）
 
-```sh
+当前工作环境是 Windows，并且后续要用终端操作仓库和 GitHub Actions，因此推荐用 GitHub CLI。它通过浏览器授权登录，可同时用于 GitHub 命令和 HTTPS Git 操作；不需要把密码或 Personal Access Token 发给助手。
+
+安装并登录：
+
+```powershell
+winget install --id GitHub.cli --source winget
+gh auth login
+gh auth status
+```
+
+`gh auth login` 中选择 GitHub.com、HTTPS 和浏览器登录；当它询问是否让 Git 使用 GitHub 凭据时选择 Yes。如果 Git 后续仍未使用该登录，可运行 `gh auth setup-git` 配置凭据助手。
+
+登录后，在 GitHub 网页创建自己的私有空仓库，再在本地添加个人 remote：
+
+```powershell
 git remote add personal https://github.com/<你的用户名>/HealthMi.git
 git remote -v
+```
+
+确认 `personal` 指向自己的仓库后，如果你决定推送，再执行：
+
+```powershell
 git push -u personal main
 ```
 
-上面的 `git push` 是供你确认目标后执行的示例；本次调查没有连接账户、添加 remote 或推送任何内容。执行前核对 `git remote -v`，确认 `personal` 是你新建的仓库。不要把 `personal` 改成上游地址，也不要向当前 `origin` 推送。也可以使用 GitHub Desktop 登录账户、添加现有本地仓库并发布到个人仓库。
+上面的 `git push` 只是供你确认目标后执行的示例；本次调查没有安装 CLI、连接账户、添加 remote 或推送任何内容。执行前核对 `git remote -v`，确认 `personal` 是你新建的仓库。不要把 `personal` 改成上游地址，也不要向当前 `origin` 推送。当前本地 `main` 比 `origin/main` 多 6 个提交；首次推送到空的个人仓库会包含这 6 个提交。
 
-本工作环境目前没有 `gh` 命令；如果要让我在此环境中继续设置，需要先安装 GitHub CLI 并完成浏览器登录，或让你使用 GitHub Desktop/Git Credential Manager 完成本地认证。认证完成后，仍应先核对 `git remote -v`，再决定是否向个人仓库推送。
+### 其他方式
+
+- **GitHub Desktop**：适合偏好图形界面的用户，可以在应用内登录并使用浏览器授权。但当前本地仓库的 `origin` 已指向上游；GitHub Desktop 官方“发布现有项目”流程要求先移除已有 remote，因此不适合直接照该流程发布。需要保留 `origin` 时，应给个人仓库单独添加 `personal`。
+- **Git Credential Manager**：适合只需要通过 HTTPS 执行普通 Git 操作的用户。它能管理 Git 凭据，但后续查询私有仓库设置或 Actions 仍需要 GitHub CLI、网页或 Desktop。
+
+对当前仓库，`gh` 是最合适的方式：一次浏览器登录后，终端 Git 与后续 Actions 管理都能使用它。当前环境尚未安装 `gh`，也没有登录任何 GitHub 账号。
 
 ## 构建工作流大致步骤
 
@@ -66,6 +90,9 @@ git push -u personal main
 - [各套餐包含的产品用量](https://docs.github.com/en/billing/reference/product-usage-included)：Free、Pro 等套餐的 Actions compute 与 artifact 存储额度。
 - [GitHub Actions 计费机制](https://docs.github.com/en/billing/concepts/product-billing/github-actions)：额度共享、计费周期、artifact 存储、超额用量和每个 runner 类型费率。
 - [设置预算控制计量产品支出](https://docs.github.com/en/billing/how-tos/set-up-budgets)：设置用量告警和达到预算后停止使用。
+- [Windows 安装 GitHub CLI](https://github.com/cli/cli/blob/trunk/docs/install_windows.md)：使用 Windows Package Manager 安装 `gh`。
+- [`gh auth login`](https://cli.github.com/manual/gh_auth_login) 与 [`gh auth setup-git`](https://cli.github.com/manual/gh_auth_setup-git)：浏览器认证并配置 Git 凭据助手。
+- [GitHub Desktop 身份验证](https://docs.github.com/en/desktop/installing-and-authenticating-to-github-desktop) 与[添加已有项目](https://docs.github.com/en/desktop/adding-and-cloning-repositories/adding-an-existing-project-to-github-using-github-desktop)：Desktop 登录及现有仓库发布流程。
 - [Workflow Artifacts](https://docs.github.com/en/actions/concepts/workflows-and-actions/workflow-artifacts)：工作流生成文件的上传和下载。
 - [在 GitHub Actions 中使用 Secrets](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-secrets)：向工作流提供敏感值。
 - [将本地代码添加到 GitHub](https://docs.github.com/en/migrations/importing-source-code/using-the-command-line-to-import-source-code/adding-locally-hosted-code-to-github)：创建仓库、添加 remote 并推送现有本地项目。
