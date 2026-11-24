@@ -14,7 +14,7 @@
 
 HealthKit 调用失败时，仪表盘按钮通过 `try?` 丢弃错误，所以即使系统 API 返回 entitlement、配置或 HealthKit 错误，界面也没有任何提示。这是可以从当前代码直接确认的 UI 诊断缺陷。
 
-**尚不能最终断定 iPhone 上那份二进制实际缺少 entitlement。**当前工作区只有本项目未签名 IPA，没有用户最后用 TrollStore 或其它工具处理、安装的那一份 IPA，也没有手机导出的最终可执行文件或 entitlement 清单。如果安装工具在安装前确实给主程序补入了正确的自定义 entitlement，结论需要据此修正。
+**本地候选 IPA 存在且已检查；仍未取得的是手机实际安装的最终 IPA。**当前工作区有仓库生成的未签名候选包（见第三节），但没有你最后交给 TrollStore 安装的处理后 IPA，也没有手机导出的最终可执行文件或 entitlement 清单。因此可以分析仓库候选包，尚不能据此断定安装后的二进制是否由安装前处理补入了 entitlement。
 
 因此当前定责为：
 
@@ -84,6 +84,8 @@ HealthKit 调用失败时，仪表盘按钮通过 `try?` 丢弃错误，所以�
 | `build/HealthMi-unsigned-ipa/HealthMi-unsigned.ipa` | `E64C6982D0E7CE13F4E0EA6CDE619F6C246CEAEE2A5CB82245803612CC6D1021` |
 
 ZIP 清单能看到 `Payload/HealthMi.app/HealthMi` 与 `Info.plist`，没有 `_CodeSignature`、`embedded.mobileprovision` 或独立 `.entitlements` 文件；同时，工作流源码确认关闭了代码签名。第一份正是先前记录、用于 iOS 16 修复后生成的候选 IPA。
+
+2026-11-24 对用户指定的本地文件 `D:/aiproject/HealthMi/build/HealthMi-unsigned-ipa-after-ios16-fix/HealthMi-unsigned-ipa/HealthMi-unsigned.ipa` 复核：SHA-256 为 `88198DBF1A140E88553CC9A6B2B7584127456888EF23264F5DA80E6027083716`；Bundle ID 为 `com.healthmi.HealthMi`，Share/Update 用途说明均存在；Mach-O 主程序没有 `LC_CODE_SIGNATURE`。所以该 IPA 本身可供分析，且是未签名候选包；不能把“没有手机最终安装包”说成“没有 IPA 文件”。
 
 **重要边界：**TrollStore 支持安装带任意 entitlement 的应用，因此“可以安装并启动”不等于“安装后一定有 HealthKit entitlement”，也不能单独证明安装器有问题。需要核对实际安装的 IPA/应用主程序中是否存在 `com.apple.developer.healthkit = true`。当前没有用户安装用的最终 IPA，也没有设备侧 entitlement 清单；所以根因判断是“更可能是构建包问题”，不是对设备/TrollStore 的最终定责。[TrollStore 官方项目说明](https://github.com/opa334/TrollStore/blob/main/README.md)
 
@@ -579,6 +581,7 @@ plutil -p /tmp/healthmi-check/Payload/HealthMi.app/Info.plist
 
 - 静态阅读了 iOS Swift 源码、XcodeGen 工程配置、两条 GitHub Actions 工作流以及仓库内 Python MCP/CLI 的关键同步、查询、存储和凭据路径。
 - 检查了本地两个未签名 IPA 的 ZIP 目录和 SHA-256；没有本机 macOS `codesign` 环境，因此没有对最终签名二进制执行 Apple 签名验证。
+- 2026-11-24 复核用户指定的 iOS 16 修复版 IPA：文件存在，ZIP 结构、SHA-256、Bundle ID、HealthKit 用途说明和 Mach-O 签名 load command 已检查；该候选包未签名。此检查不覆盖 TrollStore 处理后手机实际安装的文件。
 - 没有取得用户手机上最终安装的 IPA，也没有 iOS 16.3 设备日志/HealthKit 错误码。
 - 没有运行构建、测试、HealthKit 请求或外部小米 API 请求；本报告的非 entitlement 代码缺陷为静态风险，需要后续用针对性测试验证。
 - 本次没有运行 GitHub runner；现有静态证据和本地 IPA 包结构足以定位当前最可能的构建配置问题，无需为此公开仓库。
