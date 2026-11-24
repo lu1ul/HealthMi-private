@@ -1,4 +1,4 @@
-name: Build unsigned IPA
+name: Build iOS IPAs (unsigned and TrollStore HealthKit)
 
 on:
   push:
@@ -22,7 +22,7 @@ permissions:
 
 jobs:
   build:
-    name: Build device IPA without signing
+    name: Build unsigned and TrollStore HealthKit IPAs
     runs-on: macos-15
 
     steps:
@@ -34,6 +34,16 @@ jobs:
 
       - name: Install XcodeGen
         run: brew install xcodegen
+
+      - name: Install ldid
+        run: brew install ldid
+
+      - name: Record build tool versions
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          xcodegen --version
+          brew list --versions ldid
 
       - name: Generate Xcode project
         run: xcodegen generate
@@ -86,5 +96,121 @@ jobs:
         with:
           name: HealthMi-unsigned-ipa
           path: build/HealthMi-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Create and verify TrollStore HealthKit IPA
+        env:
+          BUNDLE_IDENTIFIER: ${{ github.event.inputs.bundle_identifier || '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          source_app="$GITHUB_WORKSPACE/build/DerivedData/Build/Products/Release-iphoneos/HealthMi.app"
+          package_root="$GITHUB_WORKSPACE/build/trollstore-package"
+          app_path="$package_root/Payload/HealthMi.app"
+          executable="$app_path/HealthMi"
+          entitlements_path="$GITHUB_WORKSPACE/HealthMi/Support/HealthMi.entitlements"
+          ipa_path="$GITHUB_WORKSPACE/build/HealthMi-trollstore-healthkit.ipa"
+          verification_root="$GITHUB_WORKSPACE/build/trollstore-verify"
+          report_path="$GITHUB_WORKSPACE/build/entitlement-report.txt"
+
+          test -d "$source_app"
+          rm -rf "$package_root" "$verification_root"
+          mkdir -p "$package_root/Payload"
+          ditto "$source_app" "$app_path"
+          test -f "$executable"
+
+          ldid "-S$entitlements_path" "$executable"
+          otool -l "$executable" | grep -q 'cmd LC_CODE_SIGNATURE'
+          ldid -e "$executable" > "$GITHUB_WORKSPACE/build/trollstore-entitlements.plist"
+
+          python3 - "$app_path/Info.plist" "$GITHUB_WORKSPACE/build/trollstore-entitlements.plist" "$executable" "$BUNDLE_IDENTIFIER" <<'PY'
+          import plistlib
+          import subprocess
+          import sys
+
+          info_path, entitlements_path, executable_path, requested_bundle_id = sys.argv[1:]
+          with open(info_path, "rb") as stream:
+              info = plistlib.load(stream)
+          with open(entitlements_path, "rb") as stream:
+              entitlements = plistlib.load(stream)
+
+          bundle_id = info.get("CFBundleIdentifier")
+          expected_bundle_id = requested_bundle_id or "com.healthmi.HealthMi"
+          if bundle_id != expected_bundle_id:
+              raise SystemExit(f"Unexpected Bundle ID: {bundle_id!r}; expected {expected_bundle_id!r}")
+          if entitlements.get("com.apple.developer.healthkit") is not True:
+              raise SystemExit("HealthKit entitlement is missing or false")
+          for key in ("NSHealthShareUsageDescription", "NSHealthUpdateUsageDescription"):
+              if not info.get(key):
+                  raise SystemExit(f"Missing Info.plist usage description: {key}")
+
+          architectures = subprocess.check_output(
+              ["lipo", "-archs", executable_path], text=True
+          ).split()
+          if "arm64" not in architectures:
+              raise SystemExit(f"arm64 architecture is missing: {architectures}")
+          print(f"Verified Bundle ID: {bundle_id}")
+          print("Verified com.apple.developer.healthkit = true")
+          print(f"Verified arm64 architecture: {', '.join(architectures)}")
+          print("Verified HealthKit usage descriptions")
+          PY
+
+          ditto -c -k --sequesterRsrc --keepParent "$package_root/Payload" "$ipa_path"
+          mkdir -p "$verification_root"
+          unzip -q "$ipa_path" -d "$verification_root"
+
+          verified_app="$verification_root/Payload/HealthMi.app"
+          verified_executable="$verified_app/HealthMi"
+          test -f "$verified_executable"
+          otool -l "$verified_executable" | grep -q 'cmd LC_CODE_SIGNATURE'
+          ldid -e "$verified_executable" > "$GITHUB_WORKSPACE/build/verified-entitlements.plist"
+
+          python3 - "$verified_app/Info.plist" "$GITHUB_WORKSPACE/build/verified-entitlements.plist" <<'PY'
+          import plistlib
+          import sys
+
+          info_path, entitlements_path = sys.argv[1:]
+          with open(info_path, "rb") as stream:
+              info = plistlib.load(stream)
+          with open(entitlements_path, "rb") as stream:
+              entitlements = plistlib.load(stream)
+          if entitlements.get("com.apple.developer.healthkit") is not True:
+              raise SystemExit("Packaged IPA lost the HealthKit entitlement")
+          if not info.get("NSHealthShareUsageDescription") or not info.get("NSHealthUpdateUsageDescription"):
+              raise SystemExit("Packaged IPA is missing HealthKit usage descriptions")
+          print("Packaged IPA entitlement and usage descriptions verified.")
+          PY
+
+          bundle_id=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$verified_app/Info.plist")
+          version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$verified_app/Info.plist")
+          {
+            echo "IPA: $(basename "$ipa_path")"
+            echo "Bundle ID: $bundle_id"
+            echo "Version: $version"
+            echo "ldid: $(brew list --versions ldid)"
+            echo "LC_CODE_SIGNATURE: present"
+            echo "com.apple.developer.healthkit: true"
+            echo "NSHealthShareUsageDescription: present"
+            echo "NSHealthUpdateUsageDescription: present"
+            if [[ -e "$verified_app/embedded.mobileprovision" ]]; then
+              echo "embedded.mobileprovision: present"
+            else
+              echo "embedded.mobileprovision: absent (TrollStore package)"
+            fi
+            echo "IPA SHA-256:"
+            shasum -a 256 "$ipa_path"
+            echo "Executable SHA-256:"
+            shasum -a 256 "$verified_executable"
+          } | tee "$report_path"
+
+      - name: Upload TrollStore HealthKit IPA
+        uses: actions/upload-artifact@v7
+        with:
+          name: HealthMi-trollstore-healthkit-ipa
+          path: |
+            build/HealthMi-trollstore-healthkit.ipa
+            build/entitlement-report.txt
           if-no-files-found: error
           retention-days: 7
