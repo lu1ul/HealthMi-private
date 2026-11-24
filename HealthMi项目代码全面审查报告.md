@@ -892,3 +892,88 @@ Apple 的授权规则允许在用户已经对本次请求的全部数据类型�
    - 本地 Windows 环境已完成 workflow 差异检查和 `git diff --check`；没有 macOS 的 `xcodebuild`、`ldid`、`otool` 工具链，因此尚未在本机模拟 GitHub runner 的最终打包。
    - 当前尚未把这些提交推送到 `lu1ul/HealthMi-private`，所以 GitHub Actions 尚未产生本轮新的 artifact。推送后必须以 Actions 日志中的 entitlement 检查和 `entitlement-report.txt` 为准。
    - CI 静态检查通过后，仍需在用户的 iOS 16.3 + TrollStore 设备上验证：安装来源是否出现 HealthMi、请求按钮是否显示系统授权表单，以及拒绝/允许后的 `HKAuthorizationStatus` 和同步行为。
+
+### 9.9 GitHub CLI 与最终 IPA 产物核验（2026-11-24）
+
+#### GitHub CLI PATH 状态
+
+- 本机已安装 GitHub CLI，实际可执行文件为：`C:\Program Files\GitHub CLI\gh.exe`。
+- 初始状态下该目录不在 Machine PATH 或 User PATH，因此直接输入 `gh` 会提示找不到命令；这属于 PATH 配置问题，不是 GitHub CLI 未安装。
+- 尝试写入系统级 PATH 时被当前 Windows 进程拒绝，原因是当前会话没有管理员权限；没有修改系统级 PATH。
+- 随后将该目录加入当前用户的持久化 User PATH。新 PowerShell 进程验证通过：
+
+  ```text
+  gh version 2.105.0 (2026-11-17)
+  github.com
+    Logged in to github.com account lu1ul
+    Active account: true
+    Git operations protocol: https
+    Token scopes: gist, read:org, repo
+  ```
+
+- 以后新开的 PowerShell、Windows Terminal 或其他终端应可以直接执行 `gh`；已经打开的旧终端需要重新打开，或临时刷新 PATH。
+
+#### GitHub Actions 构建结果
+
+- 仓库：`lu1ul/HealthMi-private`
+- 工作流 run：`45314992203`
+- 构建提交：`311403d1b9f8c7291d75d109913b4584b1c27e72`
+- runner：GitHub macOS 15 ARM64，Xcode 16.4
+- 结论：`success`
+- 本轮使用 GitHub CLI 下载，不依赖浏览器：
+
+  ```powershell
+  gh run download 45314992203 --repo lu1ul/HealthMi-private --name HealthMi-trollstore-healthkit-ipa
+  gh run download 45314992203 --repo lu1ul/HealthMi-private --name HealthMi-unsigned-ipa
+  ```
+
+#### 本地下载文件
+
+- TrollStore artifact：
+  `build/github-run-45314992203/trollstore-artifact/HealthMi-trollstore-healthkit.ipa`
+- TrollStore entitlement 报告：
+  `build/github-run-45314992203/trollstore-artifact/entitlement-report.txt`
+- unsigned 对照 artifact：
+  `build/github-run-45314992203/unsigned-artifact/HealthMi-unsigned.ipa`
+
+#### IPA 与 Mach-O 实际核验
+
+对下载后的 IPA 解包，并直接解析 `Payload/HealthMi.app/HealthMi` 的 Mach-O 结构，结果如下：
+
+| 项目 | TrollStore IPA | unsigned IPA |
+| --- | --- | --- |
+| IPA SHA-256 | `6d5701a19276fbc76523319ccacc8867df046cf85e1bdde90f254f929730ac91` | `0162e40eee5b03f598122e6956b6c244a02aa0eba007d7029060517976745b49` |
+| 主程序 SHA-256 | `4444b8350fd0b2fa44d77235b75dcf44956fb9ce0175ceb7e81d81d051fbd1c4` | `0f8e1c16e89bc9cbdcb6dfccab3cc531a134f84632cc7be56a98f0c9d2350f96` |
+| 主程序架构 | arm64 | arm64 |
+| `LC_CODE_SIGNATURE` | 存在 | 不存在 |
+| `com.apple.developer.healthkit` | `true` | 无可提取 entitlement |
+| Bundle ID | `com.healthmi.HealthMi` | `com.healthmi.HealthMi` |
+| 版本 | `1.1.0` | `1.1.0` |
+| HealthKit 用途说明 | 两项均存在 | 两项均存在 |
+| `embedded.mobileprovision` | 不存在，符合 TrollStore 伪签名包预期 | 不存在 |
+
+TrollStore IPA 的代码签名 SuperBlob 中包含 5 个签名条目，解析出的 entitlement plist 至少包含：
+
+```text
+com.apple.developer.healthkit = true
+```
+
+GitHub Actions 日志同时报告：
+
+```text
+Verified Bundle ID: com.healthmi.HealthMi
+Verified com.apple.developer.healthkit = true
+Verified arm64 architecture: arm64
+Verified HealthKit usage descriptions
+Packaged IPA entitlement and usage descriptions verified.
+ldid: ldid 2.1.5_2
+LC_CODE_SIGNATURE: present
+```
+
+#### 结论与安装要求
+
+1. 本轮工作流不是只生成文本报告：最终下载的 TrollStore IPA 主程序确实包含 `LC_CODE_SIGNATURE` 和 `com.apple.developer.healthkit=true`。
+2. 给 iOS 16.3 + TrollStore 设备安装时，应选择 `HealthMi-trollstore-healthkit.ipa`，不要选择 `HealthMi-unsigned.ipa`。
+3. 安装验证前建议先删除旧版 HealthMi，再安装新包，以避免旧包、旧授权状态或同 Bundle ID 的安装残留干扰。
+4. 该静态核验能证明包内 entitlement 已写入，但不能替代用户设备上的最终运行验证；仍需观察“健康”App 来源列表、授权弹窗和按钮错误反馈。
+5. 本轮下载和核验产生的 `build/` 文件位于 Git 忽略目录，不会进入源码提交；本地报告会保留证据和 SHA-256，便于后续对照手机实际安装包。

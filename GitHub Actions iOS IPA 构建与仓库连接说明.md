@@ -151,6 +151,24 @@ GitHub 的套餐、额度和 runner 名称可能调整，实际执行前以 GitH
 - GitHub artifact 设为保留 7 天，当前记录的过期时间为 2026-11-30 07:42 UTC；本地副本不受该期限影响。
 - 当前实施状态：私有仓库和工作流已部署，IPA 已成功构建、下载并完成包结构检查；未运行 XCTest。`origin` 仍指向原仓库，未向其推送。
 
+### GitHub CLI PATH 与 TrollStore artifact 下载记录（2026-11-24）
+
+- GitHub CLI 实际安装位置：`C:\Program Files\GitHub CLI\gh.exe`。
+- 初始未加入 PATH；系统级 PATH 写入因当前会话没有管理员权限被拒绝，随后已加入当前用户的持久化 User PATH。
+- 新 PowerShell 验证：`gh version 2.105.0`，账号 `lu1ul` 已登录，具备 `repo` scope。
+- 下载命令统一使用 GitHub CLI：
+
+  ```powershell
+  gh run download 45314992203 --repo lu1ul/HealthMi-private --name HealthMi-trollstore-healthkit-ipa --dir build/github-run-45314992203/trollstore-artifact
+  gh run download 45314992203 --repo lu1ul/HealthMi-private --name HealthMi-unsigned-ipa --dir build/github-run-45314992203/unsigned-artifact
+  ```
+
+- 本轮 run `45314992203` 成功完成，runner 为 macOS 15 ARM64、Xcode 16.4。
+- TrollStore IPA 本地路径：`build/github-run-45314992203/trollstore-artifact/HealthMi-trollstore-healthkit.ipa`。
+- TrollStore IPA SHA-256：`6d5701a19276fbc76523319ccacc8867df046cf85e1bdde90f254f929730ac91`。
+- 解包后确认主程序有 `LC_CODE_SIGNATURE`，且 entitlement 中有 `com.apple.developer.healthkit=true`；unsigned 对照包没有 `LC_CODE_SIGNATURE`。
+- `entitlement-report.txt` 与 IPA 一起下载，记录了 Bundle ID、版本、`ldid 2.1.5_2`、HealthKit entitlement、用途说明和 SHA-256。
+
 ### iOS 16 弱链接修复后的 IPA
 
 - 提交 `82fef0fbee8def00fd00f94b58af6bc4f5e19354` 推送到个人私有仓库后，`Build unsigned IPA` 自动运行并成功：[GitHub Actions 运行 `45148687288`](https://github.com/lu1ul/HealthMi-private/actions/runs/45148687288)。
