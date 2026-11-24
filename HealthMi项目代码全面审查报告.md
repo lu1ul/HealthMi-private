@@ -4,6 +4,16 @@
 > 源码审查基线：`82fef0f`（`fix: weak link SwiftData for iOS 16`；后续提交仅更新文档）。
 > 结论类型：静态代码审查 + 本地 IPA 包结构检查 + 2026-11-24 GitHub Actions 构建/模拟器诊断复核；初始审查阶段没有修改业务源码或运行构建，后续只验证了工作流和产物。
 
+## 当前结论（2026-11-24 真机验收后）
+
+本报告早期章节保留了问题定位过程和当时的证据边界；以下内容是目前应采用的最终状态：
+
+- **HealthKit 接入已在 iOS 16.3 真机确认成功。** 用户用 GitHub Actions run `45340198351` 生成的 TrollStore IPA 安装后，点击权限按钮可以触发 HealthKit 授权，HealthMi 可以出现在健康 App 的来源中。
+- **数据同步已在 iOS 16.3 真机确认成功。** 小米账号登录成功，数据可以从小米云端同步并写入 Apple 健康。
+- **Keychain `-34018` 已确认是旧 TrollStore entitlement 打包缺口，并已修复。** 新产物同时含 `com.apple.developer.healthkit = true` 与 `keychain-access-groups = [TROLLTROLL.*, com.apple.token]`，真机登录已通过。
+- **iOS 16 最低版本适配的主流程已通过真机验收。** Core Data 存储、HealthKit 写入和 TrollStore 安装路径没有阻止 iOS 16.3 运行。
+- **当前未解决的新问题是快捷指令动作“同步健康数据”显示“无法与帮助程序通信”。** 动作元数据已编译并能在快捷指令中找到；故障发生在动作执行阶段。当前最高概率是 `openAppWhenRun = false` 下在 App Intent 帮助进程中直接运行完整九类同步链路，导致执行超时、进程终止或未捕获异常；尚未取得该路径的设备系统日志，因此仍需最小化实验进一步定责。
+
 ## 一、结论摘要
 
 ### 对“是 TrollStore 安装问题还是项目代码问题”的判断
@@ -1143,3 +1153,130 @@ IPA 内共 15 个 ZIP 条目；签名 SuperBlob 包含 entitlement blob，独立
 本次修复已经解决了构建产物层面的缺口：HealthKit entitlement 与 TrollStore 默认 Keychain entitlement 同时存在，`-34018` 的直接打包原因已消除。给 iOS 16.3 + TrollStore 安装时应使用上述 `HealthMi-trollstore-healthkit.ipa`，不要使用 `HealthMi-unsigned.ipa`，也不要继续使用 run `45314992203` 生成的旧包。
 
 静态核验不能替代真机运行验证。安装新包后仍需删除旧版 HealthMi，再安装新包并实际验证：小米账号凭据是否能保存、HealthKit 授权按钮是否显示错误或系统表单，以及“健康”App 的来源列表是否出现 HealthMi。若仍出现 `-34018`，下一步需要从越狱设备导出已安装主程序并重新解析其最终 entitlement，以区分安装器后处理与应用包本身的差异。
+
+### 9.13 iOS 16.3 + TrollStore 真机验收后的结论修订（2026-11-24）
+
+用户已在 iPhone iOS 16.3、TrollStore 安装本次修复后的 `HealthMi-trollstore-healthkit.ipa`，完成以下实机验收：
+
+1. IPA 可以通过 TrollStore 安装并启动。
+2. 点击“请求健康权限”可以正常触发 HealthKit 授权流程，应用能够出现在健康 App 的访问来源中。
+3. 登录小米账号后，数据可以从小米云端同步并写入 Apple 健康。
+
+这些结果把此前报告中的若干“静态推断”提升为设备侧功能证据：
+
+| 结论 | 当前状态 | 证据 |
+|---|---|---|
+| iOS 16.3 能运行当前 iOS 16 适配版 | 已在本机路径验证 | 用户实机安装并运行成功 |
+| TrollStore IPA 的 HealthKit entitlement 可用 | 已验证 | 授权流程被系统正常触发，数据写入成功 |
+| `-34018` 的 Keychain 打包回归已修复 | 已验证 | 新包可完成登录并继续同步；此前同路线旧包在保存凭据时失败 |
+| GitHub Actions 生成的 TrollStore 包可作为安装包使用 | 已验证 | run `45340198351` 产物在 iOS 16.3 真机工作 |
+| 原来的 unsigned IPA 是否适合直接安装 | 已否定 | unsigned 包没有 `LC_CODE_SIGNATURE`，应使用 TrollStore 专用产物 |
+
+历史章节中“尚未取得手机最终安装包”“尚不能确认设备侧 entitlement”的内容保留为当时的审查记录；以上验收结果是对这些内容的后续修订，不再作为当前结论。
+
+### 9.14 快捷指令“无法与帮助程序通信”分析（2026-11-24）
+
+#### 用户现象
+
+在快捷指令中可以找到 HealthMi 的“同步健康数据”动作，但执行时显示：
+
+```text
+无法与帮助程序通信
+```
+
+这说明动作已经被快捷指令索引并开始执行；它不是“找不到动作”或“App Shortcuts 没有注册”的问题。
+
+#### 已排除的原因
+
+1. **不是 App Intent 元数据缺失。** 本次 IPA 中存在 `Payload/HealthMi.app/Metadata.appintents`，其中的 `root.ssu.yaml` 明确包含 `SyncHealthDataIntent_0` 和标题“同步健康数据”。
+2. **不是缺少独立 Intent Extension target。** `project.yml` 和生成的 `HealthMi.xcodeproj/project.pbxproj` 只有 `HealthMi` 应用 target 和 `HealthMiTests` 测试 target，没有单独的 Intent Extension。当前 App Intents 写法属于直接编译进主 App 的模式，不存在一个漏建的“帮助程序 target”。
+3. **不是快捷指令短语解析失败。** 动作已经能在快捷指令中被找到并执行到错误提示阶段；`HealthMiShortcuts` 的三条短语也已被编译进 metadata。
+4. **不是 HealthKit entitlement 的首要嫌疑。** 同一个修复后的 IPA 已在主 App 内成功触发授权并写入健康数据，HealthKit 能力本身已经通过真机验证。
+
+#### 当前代码实际执行路径
+
+快捷指令动作位于 `HealthMi/App/SyncIntent.swift`：
+
+```swift
+nonisolated static let openAppWhenRun = false
+
+@MainActor
+func perform() async throws -> some IntentResult {
+    let model = AppModel()
+    model.bootstrap()
+    let container = try await AppDatabase.shared.prepare()
+    let syncTask = Task { @MainActor in
+        await model.syncAll(
+            modelContext: container.viewContext,
+            isBackground: true
+        )
+    }
+    // 最多等待 55 秒
+    await syncTask.value
+    return .result(dialog: ...)
+}
+```
+
+因此，快捷指令帮助进程必须在一次 App Intent 调用中完成：
+
+- 读取 Keychain 中的小米凭据；
+- 初始化 Core Data 容器和持久化 store；
+- 检查 HealthKit 授权；
+- 连接小米云端并登录会话；
+- 拉取最多九类数据；
+- 处理分页、重试和限流；
+- 写入 HealthKit，写入压力数据和同步游标；
+- 刷新 HealthKit 摘要；
+- 最后返回 `IntentResult`。
+
+这与旧版 `fa08a1c` 的执行模型有实质差异：旧版 `openAppWhenRun = true`，`perform()` 只设置一个触发标记并立即返回，由主 App 界面在打开后执行同步；当前版本把完整同步链路放进了 `openAppWhenRun = false` 的帮助进程。
+
+#### 可能性排序
+
+**P0：帮助进程在 `perform()` 返回前被系统终止或通信超时。**
+
+这是目前最高概率原因。代码中的 55 秒只是应用自己创建的 watchdog，不是系统给 App Intent 的执行时限保证。单个 URL 请求本身允许 30 秒，网络失败还会按 1 秒、2 秒、4 秒退避重试；分页和九类数据的 HealthKit 去重查询还会继续增加耗时。帮助进程一旦在等待 `syncTask.value` 时被系统回收，快捷指令只能显示“无法与帮助程序通信”。
+
+这个解释也符合版本历史：旧版动作只立即返回并打开主 App，而当前版本在后台直接执行完整同步；问题正好出现在执行模型切换之后。
+
+**P1：帮助进程初始化 Core Data 或访问共享数据时失败。**
+
+`perform()` 对 `AppDatabase.shared.prepare()` 没有 `do/catch`，持久化 store 打开失败、数据库被并发占用、迁移异常或沙盒访问失败都会直接抛出到 App Intents 宿主，快捷指令不会得到应用自己的错误文本，只会显示通用通信错误。当前 iOS 16.3 不会进入 iOS 17 的 SwiftData 导入分支，但 Core Data store 初始化仍然是帮助进程中的独立启动路径。
+
+另外，`AppModel.syncActivity` 是进程内锁；主 App 和 App Intent 如果是不同进程，两个实例之间不共享这把锁。快捷指令和前台同步同时运行时，可能形成两个同步会话并发访问同一 Core Data store。这个问题不一定直接造成当前错误，但属于该执行模型的真实竞态。
+
+**P1：帮助进程中的 Keychain/HealthKit 访问失败。**
+
+新的 TrollStore entitlement 已经在主 App 真机路径验证成功，但还没有单独的帮助进程日志证明 App Intent 执行上下文拿到同样的安全能力。如果帮助进程在 `CredentialStore.load()`、HealthKit 状态检查或首次写入时被系统拒绝，当前代码没有把错误包装成可见的 Intent 错误，最终仍可能只呈现通信失败。这个可能性低于 P0，因为当前 IPA 已通过主 App 的登录、授权和同步验证，但仍需日志或最小化实验排除。
+
+**P2：后台执行中附加了不必要的工作。**
+
+`syncAll(isBackground: true)` 在所有类型完成后仍会调用 `refreshSummary()`，这会额外发起多组 HealthKit 查询；失败时还会查询通知权限并安排本地通知。快捷指令只需要知道同步结果，不需要立即刷新主界面的趋势摘要。该额外工作会扩大帮助进程的执行窗口和被终止概率。
+
+**P2：错误处理不适合 App Intent 宿主。**
+
+当前 `perform()` 没有捕获 `prepare()` 的异常，也没有为失败返回明确的 `IntentError` 或短消息；`syncAll()` 内部虽然捕获了多数单类同步错误，但帮助进程被取消、Core Data 初始化失败或其它未捕获错误仍会穿透到系统。用户看到的“无法与帮助程序通信”因此掩盖了真正的错误类型。
+
+**P3：快捷指令缓存旧 metadata。**
+
+动作已经能被找到，所以这不是首要原因。如果后续重新发布 Intent 定义，快捷指令仍可能保留旧动作缓存；删除旧动作后重新添加可以作为低成本排除项，但不能解释当前首次执行失败的主要证据。
+
+#### 当前还缺少的决定性证据
+
+目前没有 iPhone 上 Shortcuts/App Intents 的系统日志，也没有“执行后同步日志是否新增记录”的对照。因此暂时不能把故障 100% 定性为超时。应做以下最小化实验：
+
+1. 在 App 内只开启一个轻量类别，将回填范围设为 7 天，关闭其它同步类别后执行快捷指令。
+2. 分别测试 App 已打开和完全退出两种状态。
+3. 观察快捷指令报错后，HealthMi 的同步历史和健康 App 中是否已经出现部分新增数据。
+4. 再逐步打开心率、睡眠、运动和压力类别，记录从哪一类开始失败。
+
+如果“单类别 + 7 天”成功，而全量失败，P0 的执行时间/资源解释基本得到验证；如果 App 打开时成功、退出后失败，应重点检查帮助进程的 Core Data/Keychain/HealthKit 上下文；如果同步日志完全没有新增记录，则失败发生在数据库准备、凭据读取或 HealthKit 初始检查阶段。
+
+#### 推荐修复路线
+
+有两个可行方向：
+
+1. **可靠路线：恢复 `openAppWhenRun = true`。** App Intent 只负责请求打开主 App 并写入一次性触发标记，实际同步由已初始化的主 App 执行。优点是复用已经在真机验证成功的前台路径，避免把完整同步放进快捷指令帮助进程；代价是执行快捷指令时会打开 HealthMi。
+2. **静默路线：保留 `openAppWhenRun = false`，把 Intent 改成轻量调度器。** `perform()` 只做凭据/配置检查、提交后台任务并快速返回；完整同步由 BGTask 或专用同步服务执行。优点是不打开 App；代价是快捷指令不能保证立即完成同步，系统也不保证后台任务马上运行。
+
+当前证据支持优先采用路线 1 作为第一修复版本；如果必须保持完全静默，再单独设计路线 2，并为“已排队”“已完成”“失败”提供明确状态，而不是让 App Intent 直接承担九类数据的长链路同步。
