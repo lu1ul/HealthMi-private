@@ -1048,3 +1048,40 @@ com.apple.developer.healthkit = true
 ```
 
 随后 CI 必须从最终 IPA 解包主程序中同时检查 HealthKit 和 Keychain entitlement。Apple 正式签名路线仍使用原始 `HealthMi.entitlements`，避免把 TrollStore 专用的 `TROLLTROLL` 声明带入普通开发者签名包。
+
+### 9.11 TrollStore Keychain entitlement 修复实施（2026-11-24）
+
+针对 `SecItemAdd` / `SecItemUpdate` 返回 Keychain 错误 `-34018` 的回归，已按上述方案修改 `.github/workflows/build-unsigned-ipa.yml`，本地提交为：
+
+```text
+3e74366 fix: preserve TrollStore Keychain entitlements
+```
+
+#### 实施内容
+
+- 保留源文件 `HealthMi/Support/HealthMi.entitlements` 不变；该文件继续只描述 Apple 开发者签名路线需要的 HealthKit 能力。
+- 在 TrollStore 构建步骤中读取源 entitlement，并生成仅用于该产物的 `build/trollstore-entitlements.plist`。
+- 临时 entitlement 在保留 `com.apple.developer.healthkit = true` 的基础上增加：
+
+  ```text
+  application-identifier = TROLLTROLL.*
+  com.apple.developer.team-identifier = TROLLTROLL
+  get-task-allow = true
+  keychain-access-groups = [TROLLTROLL.*, com.apple.token]
+  ```
+
+- 使用 `ldid` 将合并后的 entitlement 写入 TrollStore IPA 主程序。
+- 在打包前和 IPA 解包后分别检查：
+  - `LC_CODE_SIGNATURE` 存在；
+  - `com.apple.developer.healthkit = true`；
+  - `application-identifier`、团队标识、`get-task-allow` 和两个 Keychain 访问组均符合预期；
+  - Bundle ID、arm64 架构和 HealthKit 用途说明存在。
+- `entitlement-report.txt` 增加上述 Keychain 字段，便于下载产物后复核。
+
+#### 安全边界
+
+`TROLLTROLL` entitlement 只在 GitHub Actions 的 TrollStore IPA 临时文件中生成，不写回源 `.entitlements` 文件，也不影响 Apple Developer 正式签名工作流。未签名对照 IPA 仍然保留，用于比较，不应直接作为带 HealthKit/Keychain 能力的安装包。
+
+#### 待完成的远程验证
+
+本地 Windows 环境没有 macOS 的 `xcodebuild`、`ldid` 和 `otool` 工具链，因此本地只能完成 workflow 文本检查和差异检查。下一步将只推送 `personal` 远程，使用 GitHub Actions 的 macOS 15 runner 构建，再通过 `gh` 下载 `HealthMi-trollstore-healthkit-ipa` artifact，记录 run ID、IPA SHA-256、主程序 SHA-256 和最终 entitlement 解析结果。远程构建成功后，仍需在 iOS 16.3 + TrollStore 真机上重新安装并验证 Keychain 登录与 HealthKit 来源列表。
