@@ -2,7 +2,7 @@
 
 > 审查日期：2026-11-23
 > 源码审查基线：`82fef0f`（`fix: weak link SwiftData for iOS 16`；后续提交仅更新文档）。
-> 结论类型：静态代码审查 + 本地 IPA 包结构检查；本轮没有修改业务源码，没有运行构建或测试，也没有在 GitHub runner 上运行模拟器。
+> 结论类型：静态代码审查 + 本地 IPA 包结构检查 + 2026-11-24 GitHub Actions 构建/模拟器诊断复核；初始审查阶段没有修改业务源码或运行构建，后续只验证了工作流和产物。
 
 ## 一、结论摘要
 
@@ -90,6 +90,19 @@ ZIP 清单能看到 `Payload/HealthMi.app/HealthMi` 与 `Info.plist`，没有 `_
 **重要边界：**TrollStore 支持安装带任意 entitlement 的应用，因此“可以安装并启动”不等于“安装后一定有 HealthKit entitlement”，也不能单独证明安装器有问题。需要核对实际安装的 IPA/应用主程序中是否存在 `com.apple.developer.healthkit = true`。当前没有用户安装用的最终 IPA，也没有设备侧 entitlement 清单；所以根因判断是“更可能是构建包问题”，不是对设备/TrollStore 的最终定责。[TrollStore 官方项目说明](https://github.com/opa334/TrollStore/blob/main/README.md)
 
 TrollStore 官方说明的 entitlement 使用流程要求先通过 `ldid` 将自定义 entitlement 伪签进应用主程序，再由 TrollStore 安装并保留。仓库的 IPA 工作流没有运行 `ldid`，也没有执行 Xcode 代码签名；因此如果安装包未经其它处理直接交给 TrollStore，这条构建链路没有为 HealthKit 准备 entitlement。[TrollStore 官方 README](https://github.com/opa334/TrollStore/blob/main/README.md)
+
+### 2026-11-24 GitHub Actions 重建与产物复核
+
+本次按“先修复工作流，再分别验证 iOS 16.4 模拟器和设备目标 IPA”的顺序执行，目标仓库为私有仓库 `lu1ul/HealthMi-private`，运行代码版本为本地提交 `68b5cce`（`ci: fail simulator workflow on launch errors`）。本次只推送到该私有仓库，没有推送到原始仓库 `ShawnDiego/HealthMi`。
+
+- **iOS 16.4 模拟器诊断：**工作流运行 `45303564969` 成功，Xcode 版本为 `16.4 (16F6)`，runtime 为 `com.apple.CoreSimulator.SimRuntime.iOS-16-4`，设备为 `iPhone 14`。安装退出码为 `0`，启动退出码为 `0`，启动等待 20 秒后进程仍存在；没有上传崩溃报告。截图显示应用已进入前台并展示 iOS 通知权限请求。
+- **模拟器测试边界：**该工作流生成并验证的是 `HealthMi.app`，不是可装到真机的 IPA。模拟器运行没有执行 HealthKit 真机授权流程，也不能证明 iOS 16.3 设备上的 HealthKit entitlement 或“健康”App 来源登记正常；通知权限提示也没有被自动点击。
+- **设备目标 IPA：**工作流运行 `45303591637` 成功，构建、打包和 artifact 上传均成功。下载到本地的产物为 `D:/aiproject/HealthMi/build/github-run-45303591637/HealthMi-unsigned.ipa`，SHA-256 为 `48A595AACF66D26829D8CE41109EC59FC81115098C933E6D9A16B81C16D004A2`。
+- **IPA 包结构：**ZIP 包包含 `Payload/HealthMi.app/HealthMi`、`Info.plist` 和 App Intents 元数据；Bundle ID 为 `com.healthmi.HealthMi`，`CFBundleExecutable` 为 `HealthMi`，`NSHealthShareUsageDescription` 与 `NSHealthUpdateUsageDescription` 均存在。
+- **签名与 entitlement 复核：**该 IPA 没有 `_CodeSignature`、`embedded.mobileprovision` 或独立 `.entitlements` 文件；主程序是 64 位 arm64 Mach-O，未发现 `LC_CODE_SIGNATURE`。因此这次构建证明“设备目标 IPA 可以成功生成”，但没有解决“HealthKit entitlement 是否进入最终可执行文件”的关键问题。若该文件直接交给 TrollStore，仍需先确认安装前的 entitlement 处理方式；最可靠的最终证据仍是安装后主程序的 entitlement 清单。
+- **与之前本地 IPA 的比较：**本次 GitHub 产物与之前的 iOS 16 修复版 IPA 在主程序大小、Bundle ID、Info.plist 和主要资源上基本一致；GitHub 构建的 App Intents 生成元数据存在正常的构建差异。这没有改变未签名主程序的结论。
+
+因此，本轮的实际结论是：**GitHub iOS 16.4 模拟器验证通过；设备 IPA 构建通过并已完成包级分析；IPA 仍是未签名候选包，HealthKit 权限故障不能仅凭“构建成功”视为已修复。**
 
 ## 四、最能解释当前症状的因果链
 
@@ -582,19 +595,19 @@ plutil -p /tmp/healthmi-check/Payload/HealthMi.app/Info.plist
 - 静态阅读了 iOS Swift 源码、XcodeGen 工程配置、两条 GitHub Actions 工作流以及仓库内 Python MCP/CLI 的关键同步、查询、存储和凭据路径。
 - 检查了本地两个未签名 IPA 的 ZIP 目录和 SHA-256；没有本机 macOS `codesign` 环境，因此没有对最终签名二进制执行 Apple 签名验证。
 - 2026-11-24 复核用户指定的 iOS 16 修复版 IPA：文件存在，ZIP 结构、SHA-256、Bundle ID、HealthKit 用途说明和 Mach-O 签名 load command 已检查；该候选包未签名。此检查不覆盖 TrollStore 处理后手机实际安装的文件。
+- 2026-11-24 通过私有仓库 GitHub Actions 重跑 iOS 16.4 模拟器诊断和设备目标 IPA 构建：模拟器运行 `45303564969` 成功，设备 IPA 运行 `45303591637` 成功；已下载并复核新的 IPA，确认其 SHA-256、ZIP 清单、Bundle ID、HealthKit 用途说明和 `LC_CODE_SIGNATURE` 状态。
 - 没有取得用户手机上最终安装的 IPA，也没有 iOS 16.3 设备日志/HealthKit 错误码。
-- 没有运行构建、测试、HealthKit 请求或外部小米 API 请求；本报告的非 entitlement 代码缺陷为静态风险，需要后续用针对性测试验证。
-- 本次没有运行 GitHub runner；现有静态证据和本地 IPA 包结构足以定位当前最可能的构建配置问题，无需为此公开仓库。
-- 本次没有修改项目源码、没有改变 GitHub 仓库公开性、没有 push。
-- 本次补充审查开始时，`main` 相对 `personal/main` 领先 3 个本地提交；已存在的未跟踪文件 `项目分析-优先关注问题.md` 保持原样。
+- 初始静态审查阶段没有运行 XCTest、HealthKit 请求或外部小米 API 请求；本报告的非 entitlement 代码缺陷仍是静态风险，需要后续用针对性测试验证。2026-11-24 的后续验证只运行了 GitHub Actions 的 iOS 16.4 模拟器诊断和设备目标 IPA 构建，没有运行 XCTest 或真实设备 HealthKit 请求。
+- 2026-11-23 补充审查开始时，`main` 相对 `personal/main` 领先 3 个本地提交；之后新增了工作流修复提交并推送到 `lu1ul/HealthMi-private`，原始仓库 `ShawnDiego/HealthMi` 未被推送。已存在的未跟踪文件 `项目分析-优先关注问题.md` 保持原样。
+- 初始静态审查阶段没有修改业务源码或改变仓库公开性；后续只修改了模拟器工作流的失败状态传播，并将该工作流修复推送到私有仓库以触发验证。
 - 2026-11-23 继续静态审查代码基线 `82fef0f`，补充核对 Swift/Python 卡路里与睡眠分期差异、HealthKit 睡眠区间统计、快捷指令取消和后台任务完成竞态；本轮另有独立只读复核确认，本地 unsigned IPA 主可执行文件没有 `LC_CODE_SIGNATURE`。这仍不能证明用户手机上的最终安装包经过后处理后缺少 entitlement。
 - 后续静态检查继续覆盖增量日活动更新、强制回填与 workout 心率关联、API 分页字段校验、Swift 数值转换、跨区域请求时区、MCP 敏感输出及 SQLite 连接生命周期；这些均为代码阅读结论，尚未运行对应回归场景。
 - 本轮补充核对批次内 external UUID 去重、分页游标 JSON 编码和 CSV 导出参数；确认其为静态可见的实现缺口，但相关服务端重复页/特殊游标及 HealthKit 对重复批次的行为没有真实样本或运行证据。
-- 本轮审查网页登录 Cookie 域校验、同步过程中的账号/配置变化、部分失败日志以及 GitHub Actions 诊断与测试步骤；CI 结论来自工作流 YAML 静态检查，未触发 GitHub Actions。
+- 初始静态审查轮次审查了网页登录 Cookie 域校验、同步过程中的账号/配置变化、部分失败日志以及 GitHub Actions 诊断与测试步骤；当时的 CI 结论来自工作流 YAML 静态检查，未触发 GitHub Actions。后续 GitHub Actions 运行结果已在本节前文记录。
 - 另复核首次/强制回填窗口与界面天数选项，确认 N 天参数向下取整后包含 N+1 个日历日期；此结论为静态计算，未运行 API 请求。
 - 另复核解析器对缺失时间戳的默认路径，确认若记录数值字段有效但 `item.time` 缺失，会产生 1970 年附近的样本时间；没有使用真实服务端异常响应验证发生频率。
 - 另核对 README 中的后台刷新承诺及测试清单，发现“每小时”措辞高估 iOS 调度保证、且引用了仓库中不存在的 `MiRegionTests`。
-- 本轮没有运行构建、测试或 GitHub runner；没有修改业务代码，未改变仓库可见性，未 push。`项目分析-优先关注问题.md` 未跟踪文件保持未暂存、未修改。
+- 初始静态审查轮次没有运行构建、测试或 GitHub runner；后续验证已按上方记录完成 GitHub Actions 运行。没有修改业务源码，未改变仓库可见性；工作流修复只推送到私有仓库。`项目分析-优先关注问题.md` 未跟踪文件保持未暂存、未修改。
 
 ## 八、参考资料
 
