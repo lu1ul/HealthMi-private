@@ -1085,3 +1085,61 @@ com.apple.developer.healthkit = true
 #### 待完成的远程验证
 
 本地 Windows 环境没有 macOS 的 `xcodebuild`、`ldid` 和 `otool` 工具链，因此本地只能完成 workflow 文本检查和差异检查。下一步将只推送 `personal` 远程，使用 GitHub Actions 的 macOS 15 runner 构建，再通过 `gh` 下载 `HealthMi-trollstore-healthkit-ipa` artifact，记录 run ID、IPA SHA-256、主程序 SHA-256 和最终 entitlement 解析结果。远程构建成功后，仍需在 iOS 16.3 + TrollStore 真机上重新安装并验证 Keychain 登录与 HealthKit 来源列表。
+
+### 9.12 修复后 TrollStore IPA 远程构建与独立核验（2026-11-24）
+
+#### GitHub Actions 运行
+
+- 仓库：`lu1ul/HealthMi-private`
+- 推送目标：`personal/main`；没有推送到 `origin` 上游。
+- 构建提交：`16a0797e61ba4ca2b12986222b32c8ec9fc541c6`
+- Actions run：`45340198351`
+- Runner：macOS 15 ARM64，Xcode 16.4，`ldid 2.1.5_2`
+- 结果：成功；设备目标构建、未签名对照 IPA、TrollStore IPA 创建、打包前检查、解包后检查和 artifact 上传全部通过。
+
+#### 产物下载
+
+按约定使用 GitHub CLI 下载，没有使用浏览器：
+
+```powershell
+& "C:/Program Files/GitHub CLI/gh.exe" run download 45340198351 `
+  --repo "lu1ul/HealthMi-private" `
+  --name "HealthMi-trollstore-healthkit-ipa" `
+  --dir "build/github-run-45340198351/trollstore-artifact"
+```
+
+本地文件：
+
+```text
+build/github-run-45340198351/trollstore-artifact/HealthMi-trollstore-healthkit.ipa
+build/github-run-45340198351/trollstore-artifact/entitlement-report.txt
+```
+
+#### IPA 独立解析结果
+
+除 CI 日志外，又在 Windows 本地对下载的 IPA 做了 ZIP、Info.plist 和 Mach-O 签名块解析：
+
+| 检查项 | 结果 |
+|---|---|
+| IPA SHA-256 | `51343485675ca1d81c6b56afbfa9130945f53fcf253ba767802ccbc911de806c` |
+| 主程序 SHA-256 | `dbdc48bd33311f9a3b59bec0694e6da56ca7c4e82f8a4104074af51734467c82` |
+| Bundle ID | `com.healthmi.HealthMi` |
+| 版本 | `1.1.0` |
+| 主程序架构 | arm64 thin Mach-O |
+| `LC_CODE_SIGNATURE` | 存在；签名块 offset `3270512`，size `43056` |
+| `com.apple.developer.healthkit` | `true` |
+| `application-identifier` | `TROLLTROLL.*` |
+| `com.apple.developer.team-identifier` | `TROLLTROLL` |
+| `get-task-allow` | `true` |
+| `keychain-access-groups` | `TROLLTROLL.*`、`com.apple.token` |
+| `NSHealthShareUsageDescription` | 存在 |
+| `NSHealthUpdateUsageDescription` | 存在 |
+| `embedded.mobileprovision` | 不存在，符合 TrollStore 产物预期 |
+
+IPA 内共 15 个 ZIP 条目；签名 SuperBlob 包含 entitlement blob，独立解析出的 plist 与 CI 报告完全一致。
+
+#### 结论
+
+本次修复已经解决了构建产物层面的缺口：HealthKit entitlement 与 TrollStore 默认 Keychain entitlement 同时存在，`-34018` 的直接打包原因已消除。给 iOS 16.3 + TrollStore 安装时应使用上述 `HealthMi-trollstore-healthkit.ipa`，不要使用 `HealthMi-unsigned.ipa`，也不要继续使用 run `45314992203` 生成的旧包。
+
+静态核验不能替代真机运行验证。安装新包后仍需删除旧版 HealthMi，再安装新包并实际验证：小米账号凭据是否能保存、HealthKit 授权按钮是否显示错误或系统表单，以及“健康”App 的来源列表是否出现 HealthMi。若仍出现 `-34018`，下一步需要从越狱设备导出已安装主程序并重新解析其最终 entitlement，以区分安装器后处理与应用包本身的差异。
