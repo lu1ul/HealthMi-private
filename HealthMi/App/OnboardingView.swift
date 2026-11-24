@@ -118,7 +118,11 @@ struct OnboardingView: View {
             .navigationTitle("开始使用")
             .sheet(isPresented: $showWebLogin) {
                 MiWebLoginView(onConnected: {
-                    try? await model.requestHealthKit()
+                    do {
+                        try await model.requestHealthKit()
+                    } catch {
+                        errorMessage = model.healthKitError ?? error.localizedDescription
+                    }
                 })
             }
         }

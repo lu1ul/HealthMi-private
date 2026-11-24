@@ -52,8 +52,20 @@ struct DashboardView: View {
                     LabeledContent("Apple 健康", value: model.healthKitAuthorized ? "已授权" : "未授权")
                     if !model.healthKitAuthorized {
                         Button("请求健康权限") {
-                            Task { try? await model.requestHealthKit() }
+                            Task {
+                                do {
+                                    try await model.requestHealthKit()
+                                } catch {
+                                    // requestHealthKit 已保存可读错误，供当前区域展示。
+                                }
+                            }
                         }
+                    }
+                    if let healthKitError = model.healthKitError {
+                        Text(healthKitError)
+                            .font(.footnote)
+                            .foregroundStyle(.red)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                     if model.authNeedsRefresh {
                         Label("小米凭据已过期，请更新后重试", systemImage: "exclamationmark.triangle")

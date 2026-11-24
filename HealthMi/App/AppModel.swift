@@ -23,6 +23,7 @@ final class AppModel: ObservableObject {
     @Published var connected = false
     @Published var accountID = ""
     @Published var healthKitAuthorized = false
+    @Published var healthKitError: String?
     @Published var isSyncing = false
     @Published var backfillDays = 30
     @Published var statusMessage = ""
@@ -122,9 +123,15 @@ final class AppModel: ObservableObject {
     // MARK: - HealthKit
 
     func requestHealthKit() async throws {
-        guard HealthKitManager.isAvailable else { throw AppError.healthKitUnavailable }
-        try await HealthKitManager.requestAuthorization()
-        refreshHealthKitStatus()
+        healthKitError = nil
+        do {
+            guard HealthKitManager.isAvailable else { throw AppError.healthKitUnavailable }
+            try await HealthKitManager.requestAuthorization()
+            refreshHealthKitStatus()
+        } catch {
+            healthKitError = Self.describeHealthKitError(error)
+            throw error
+        }
     }
 
     func refreshHealthKitStatus() {
@@ -157,7 +164,9 @@ final class AppModel: ObservableObject {
             try await HealthKitManager.requestAuthorization()
             refreshHealthKitStatus()
         } catch {
-            lastError = "HealthKit 授权失败：\(error.localizedDescription)"
+            let message = Self.describeHealthKitError(error)
+            healthKitError = message
+            lastError = message
         }
     }
 
@@ -288,6 +297,19 @@ final class AppModel: ObservableObject {
             }
         }
         return error.localizedDescription
+    }
+
+    /// 把授权请求错误转成可定位的消息，同时保留系统提供的错误文本。
+    private static func describeHealthKitError(_ error: Error) -> String {
+        let nsError = error as NSError
+        if nsError.domain == HKErrorDomain {
+            if nsError.code == HKError.Code.errorAuthorizationDenied.rawValue
+                || nsError.code == HKError.Code.errorAuthorizationNotDetermined.rawValue {
+                return "HealthKit 授权失败（HKError code=\(nsError.code)）：授权被拒绝或尚未决定。请在“健康”App 的“来源”中检查 HealthMi。"
+            }
+            return "HealthKit 授权失败（HKError code=\(nsError.code)）：\(error.localizedDescription)"
+        }
+        return "HealthKit 授权失败（\(nsError.domain) / code=\(nsError.code)）：\(error.localizedDescription)"
     }
 
     private func ensureEngine() async throws {
