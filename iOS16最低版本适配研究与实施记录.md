@@ -96,3 +96,38 @@
 - 本地提交：诊断结论 `6144017 docs: record iOS 16 simulator crash cause`；弱链接修复 `82fef0f fix: weak link SwiftData for iOS 16`；复测结果本次单独提交。
 - 设备版构建验证：修复提交的 push 还触发了 Release IPA 工作流，运行 `45148687288` 成功，生成未签名 IPA。文件 SHA-256 为 `88198DBF1A140E88553CC9A6B2B7584127456888EF23264F5DA80E6027083716`；包内无 `_CodeSignature` 和 provisioning profile。文件位于忽略的 `build/HealthMi-unsigned-ipa-after-ios16-fix/`，需用户用自己的证书签名。
 - 资料：[Apple Xcode Build Settings Reference](https://developer.apple.com/documentation/xcode/build-settings-reference)、[Apple Frameworks and Weak Linking](https://developer.apple.com/library/archive/documentation/MacOSX/Conceptual/BPFrameworks/Concepts/WeakLinking.html)。
+
+## 2026-11-24 真机验收与快捷指令后续问题
+
+### 已完成的 iOS 16.3 真机验收
+
+用户使用 GitHub Actions run `45340198351` 生成的 `HealthMi-trollstore-healthkit.ipa`，在 iPhone iOS 16.3 + TrollStore 上完成验证：
+
+- IPA 安装并启动成功；
+- HealthKit 授权按钮可以触发系统授权流程；
+- 健康 App 中可以出现 HealthMi 来源；
+- 小米账号可以登录；
+- 小米云端数据可以同步写入 Apple 健康；
+- 之前的 Keychain `-34018` 不再出现。
+
+因此，本次 iOS 16 最低版本适配的主流程已经有真机证据支持。原文中关于“尚未在 iOS 16.3 真机验证”的状态属于实施过程记录，当前应以本节结果为准。
+
+### 新发现：快捷指令无法与帮助程序通信
+
+快捷指令中可以找到“同步健康数据”，但执行时显示“无法与帮助程序通信”。当前代码在 `HealthMi/App/SyncIntent.swift` 中将 `openAppWhenRun` 设为 `false`，并在 `perform()` 内直接执行完整同步。该调用会在一次 App Intent 请求中初始化 Core Data、读取 Keychain、登录小米服务、拉取最多九类数据、写入 HealthKit、保存同步游标并刷新摘要，最长等待 55 秒。
+
+初步判断优先级：
+
+1. 帮助进程在动作返回前因执行时间、网络重试、分页或 HealthKit 写入开销被系统终止；
+2. 帮助进程初始化 Core Data 或访问安全存储时抛出未包装异常；
+3. App Intent 执行上下文中的 Keychain/HealthKit 权限与主 App 路径存在差异；
+4. 动作成功后额外刷新摘要、查询通知权限，扩大了帮助进程的执行窗口。
+
+IPA 已包含 `Metadata.appintents`，因此这不是动作注册失败。旧提交 `fa08a1c` 的快捷指令只设置触发标记并打开主 App，当前版本将完整同步移入 `openAppWhenRun = false` 的帮助进程，这一执行模型变化是最重要的回归线索。
+
+当前未修改代码，等待选择修复路线：
+
+- **可靠路线：**恢复 `openAppWhenRun = true`，由主 App 执行已经验证成功的同步流程；
+- **静默路线：**保留 `openAppWhenRun = false`，将 Intent 改为快速提交任务，完整同步交给后台任务，并返回“已排队/已完成/失败”的明确状态。
+
+详细分析、证据和最小化实验步骤见 `HealthMi项目代码全面审查报告.md` 第 9.14 节。
