@@ -977,3 +977,74 @@ LC_CODE_SIGNATURE: present
 3. 安装验证前建议先删除旧版 HealthMi，再安装新包，以避免旧包、旧授权状态或同 Bundle ID 的安装残留干扰。
 4. 该静态核验能证明包内 entitlement 已写入，但不能替代用户设备上的最终运行验证；仍需观察“健康”App 来源列表、授权弹窗和按钮错误反馈。
 5. 本轮下载和核验产生的 `build/` 文件位于 Git 忽略目录，不会进入源码提交；本地报告会保留证据和 SHA-256，便于后续对照手机实际安装包。
+
+### 9.10 TrollStore 版登录失败：Keychain 错误 `-34018` 根因（2026-11-24）
+
+用户重新安装本轮 TrollStore IPA 后，登录小米账号时出现：
+
+```text
+保存并验证登录凭证失败：Keychain 错误（-34018）
+```
+
+#### 代码侧排查
+
+- `HealthMi/App/CredentialStore.swift` 在本轮没有改动，仍使用 `SecItemUpdate`；找不到记录时使用 `SecItemAdd`。
+- Keychain 查询使用 `kSecClassGenericPassword`、service 和 account，没有显式设置 `kSecAttrAccessGroup`；因此访问组由最终安装二进制的签名 entitlement 决定。
+- 本轮近期提交 `565cd71`、`556f8a0`、`b71ad8f` 均没有修改 Keychain 查询逻辑。
+- 因此错误发生在 Keychain 安全上下文，而不是小米网页登录 Cookie 提取、网络连接、Core Data 或 iOS 16 存储迁移。
+
+#### 打包侧证据
+
+本轮下载并解析的 TrollStore IPA 主程序 entitlement 只有 HealthKit 相关声明，至少确认了：
+
+```text
+com.apple.developer.healthkit = true
+```
+
+它没有包含 TrollStore 在“无 entitlement 主程序”情况下使用的默认 Keychain 相关声明。
+
+通过 GitHub CLI 读取 TrollStore 官方 `RootHelper/main.m` 的源码可见，TrollStore 只有在主程序没有任何 entitlement 时才创建 fallback entitlement：
+
+```text
+application-identifier = TROLLTROLL.*
+com.apple.developer.team-identifier = TROLLTROLL
+get-task-allow = true
+keychain-access-groups = [TROLLTROLL.*, com.apple.token]
+```
+
+当前工作流先执行了：
+
+```text
+ldid -SHealthMi.entitlements HealthMi
+```
+
+这使主程序不再是“无 entitlement”。安装时 TrollStore 会保留已有的 HealthKit entitlement，也就不会再走上述 fallback 分支；应用的默认 Keychain 访问组因此缺失，保存凭据时返回 `-34018`（`errSecMissingEntitlement`）。
+
+#### 为什么原版可以登录
+
+- 原版 `HealthMi-unsigned.ipa` 的主程序没有 `LC_CODE_SIGNATURE`，也没有可提取的 entitlement。
+- 将这类 unsigned 主程序交给 TrollStore 时，会满足“无 entitlement”条件，TrollStore 自动加入 `TROLLTROLL.*` Keychain 访问组。
+- 本轮 TrollStore IPA 虽然正确加入了 HealthKit entitlement，却没有同时合并 TrollStore 默认 Keychain entitlement，因此出现“健康权限修好了，但登录 Keychain 失败”的回归。
+
+#### 结论
+
+这是本轮 **TrollStore entitlement 打包方案的回归**，不是 `CredentialStore` Swift 代码回归，也不是用户手机上的 Keychain 数据本身损坏。当前产物在 HealthKit 能力和 Keychain fallback 之间缺少合并：
+
+```text
+当前：HealthKit entitlement ✅，TrollStore Keychain fallback ❌
+需要：HealthKit entitlement ✅，TrollStore Keychain entitlement ✅
+```
+
+#### 修复方向（待确认后实施）
+
+推荐只在 TrollStore 工作流生成的临时 entitlement 文件中合并以下声明，不修改 Apple 开发者签名用的 `HealthMi.entitlements` 源文件：
+
+```text
+application-identifier = TROLLTROLL.*
+com.apple.developer.team-identifier = TROLLTROLL
+get-task-allow = true
+keychain-access-groups = [TROLLTROLL.*, com.apple.token]
+com.apple.developer.healthkit = true
+```
+
+随后 CI 必须从最终 IPA 解包主程序中同时检查 HealthKit 和 Keychain entitlement。Apple 正式签名路线仍使用原始 `HealthMi.entitlements`，避免把 TrollStore 专用的 `TROLLTROLL` 声明带入普通开发者签名包。
