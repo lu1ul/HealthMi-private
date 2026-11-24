@@ -54,6 +54,9 @@ struct SyncErrorDetails: Codable, Hashable, Sendable {
     /// 将项目内错误和系统 NSError 统一为可持久化结构。
     static func from(_ error: Error) -> Self {
         switch error {
+        case let error as AppError:
+            return Self(domain: "HealthMi.App", code: error.code, message: error.localizedDescription)
+
         case let error as MiAPIError:
             switch error {
             case .api(let code, _):
@@ -220,6 +223,10 @@ enum SyncRunStore {
 
     static func latest() -> SyncRunRecord? {
         (try? load())?.first
+    }
+
+    static func latestThrowing() throws -> SyncRunRecord? {
+        try load().first
     }
 
     static func record(for id: UUID) -> SyncRunRecord? {

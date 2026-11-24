@@ -6,6 +6,21 @@ import os
 enum BackgroundSync {
     static let taskIdentifier = "com.healthmi.HealthMi.sync"
 
+    /// BGTask 可能同时收到 expirationHandler 和同步结束回调；保证只完成一次。
+    private final class CompletionGate: @unchecked Sendable {
+        private let lock = OSAllocatedUnfairLock(initialState: false)
+
+        func run(_ action: () -> Void) {
+            let shouldRun = lock.withLock { completed in
+                guard !completed else { return false }
+                completed = true
+                return true
+            }
+            guard shouldRun else { return }
+            action()
+        }
+    }
+
     /// 当前后台同步 Task 引用，用于 expirationHandler 取消。
     @MainActor private static var syncTask: Task<Void, Never>?
 
@@ -21,12 +36,12 @@ enum BackgroundSync {
                 task.setTaskCompleted(success: false)
                 return
             }
-            schedule()
-            var didComplete = false
+            try? schedule()
+            let completionGate = CompletionGate()
             func complete(_ success: Bool) {
-                guard !didComplete else { return }
-                didComplete = true
-                refreshTask.setTaskCompleted(success: success)
+                completionGate.run {
+                    refreshTask.setTaskCompleted(success: success)
+                }
             }
 
             refreshTask.expirationHandler = {

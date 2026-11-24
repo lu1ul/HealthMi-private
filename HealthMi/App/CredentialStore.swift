@@ -54,6 +54,17 @@ enum CredentialStore {
         return (userId, passToken)
     }
 
+    /// 读取凭据并保留 Keychain 系统错误，供后台排队和详细错误报告使用。
+    /// 返回 nil 表示本机没有完整凭据；Keychain 访问失败则抛出具体 OSStatus。
+    static func loadThrowing() throws -> (userId: String, passToken: String)? {
+        guard let userId = try getThrowing(key: userIdKey, service: service),
+              let passToken = try getThrowing(key: passTokenKey, service: service)
+        else {
+            return nil
+        }
+        return (userId, passToken)
+    }
+
     static func delete() {
         try? delete(key: userIdKey, service: service)
         try? delete(key: passTokenKey, service: service)
@@ -97,6 +108,29 @@ enum CredentialStore {
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         guard status == errSecSuccess, let data = result as? Data else { return nil }
         return String(data: data, encoding: .utf8)
+    }
+
+    private static func getThrowing(key: String, service: String) throws -> String? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: key,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        if status == errSecItemNotFound { return nil }
+        guard status == errSecSuccess else {
+            throw KeychainError(status: status)
+        }
+        guard let data = result as? Data else {
+            throw KeychainError(status: errSecDecode)
+        }
+        guard let value = String(data: data, encoding: .utf8) else {
+            throw KeychainError(status: errSecDecode)
+        }
+        return value
     }
 
     private static func delete(key: String, service: String) throws {

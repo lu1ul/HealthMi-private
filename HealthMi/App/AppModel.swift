@@ -8,6 +8,13 @@ enum AppError: LocalizedError {
     case noCredentials
     case healthKitUnavailable
 
+    var code: Int {
+        switch self {
+        case .noCredentials: return 401
+        case .healthKitUnavailable: return 503
+        }
+    }
+
     var errorDescription: String? {
         switch self {
         case .noCredentials: return "未找到小米凭据，请先在设置页登录。"
