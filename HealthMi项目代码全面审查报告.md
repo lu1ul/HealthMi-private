@@ -625,3 +625,238 @@ plutil -p /tmp/healthmi-check/Payload/HealthMi.app/Info.plist
 - Swift 标准库：[`Int.init(_ source: Double)`](https://developer.apple.com/documentation/swift/int/init(_:))——浮点转整数要求输入值可由目标整数类型表示；对外部文本解析应先验证范围与有限性。
 - Python 标准库：[sqlite3 connection context manager](https://docs.python.org/3/library/sqlite3.html#how-to-use-the-connection-context-manager)——连接上下文管理器提交或回滚事务，但不会关闭连接。
 - TrollStore：[官方 README](https://github.com/opa334/TrollStore/blob/main/README.md)——用于核对其支持范围和 entitlement 处理方式；TrollStore 可处理带任意 entitlement 的应用，但安装成功本身并不证明 HealthKit entitlement 存在。
+
+---
+
+## 九、公开仓库变更与原版仓库/IPA 深度对比（2026-11-24）
+
+### 9.1 GitHub 仓库可见性已核验
+
+已按用户授权将 lu1ul/HealthMi-private 从私有改为公开，并通过 GitHub API 回读确认：
+
+| 仓库 | 可见性 | 是否 fork | main 当前提交 |
+|---|---|---:|---|
+| lu1ul/HealthMi-private | PUBLIC | 否 | 68b5cce75a37a9ffb1438ca42310c85721f3d73c |
+| lu1ul/HealthMi | PUBLIC | 是，父仓库为 ShawnDiego/HealthMi | e5faf4e9b23f193a2362d7294cebc4c9fbe88574 |
+| ShawnDiego/HealthMi | PUBLIC | 否 | 5930b706003ac0b3ef08894f09fa7b61615e96e0 |
+
+本次可见性变更没有向 ShawnDiego/HealthMi 推送提交。公开后，lu1ul/HealthMi-private 的代码、提交历史和工作流均可被其他人查看；仓库历史中如果曾经出现过敏感内容，改为公开不会自动清除历史。
+
+### 9.2 三个仓库的源码和工程配置差异
+
+#### HealthKit 相关源码实际上没有变化
+
+以下文件在当前 iOS 16 适配版与 lu1ul/HealthMi 原版 fork 中逐字一致：
+
+- HealthMi/Health/HealthKitManager.swift
+- HealthMi/Health/HealthKitReader.swift
+- HealthMi/Health/HealthWriter.swift
+- HealthMi/Support/Info.plist
+- HealthMi/Support/HealthMi.entitlements
+
+三方共同的关键值为：
+
+    Bundle ID: com.healthmi.HealthMi
+    com.apple.developer.healthkit: true（只存在于工程输入的 entitlement 文件）
+    NSHealthShareUsageDescription: 存在
+    NSHealthUpdateUsageDescription: 存在
+
+授权调用链也一致：
+
+    DashboardView
+      -> Task { try? await model.requestHealthKit() }
+      -> AppModel.requestHealthKit()
+      -> HealthKitManager.requestAuthorization()
+      -> HKHealthStore.requestAuthorization(toShare:read:)
+
+因此，当前 iOS 16 适配版在 HealthKitManager、用途说明、Bundle ID 或请求类型集合上，没有发现一个能单独解释“原版能弹窗、适配版不弹窗”的源码差异。
+
+#### 真正的代码差异集中在 SwiftData 到 Core Data
+
+当前 iOS 16 适配版：
+
+- AppModel 使用 ObservableObject、Published 和 Core Data 上下文；
+- DashboardView 使用 FetchRequest；
+- HealthMiApp 使用异步准备的 NSPersistentContainer；
+- 新增 HealthMi/Sync/CoreDataModels.swift；
+- 启动时在 iOS 17+ 迁移旧 SwiftData 数据。
+
+原版 fork 和上游：
+
+- AppModel 使用 Observation 的 Observable；
+- 视图使用 SwiftData Query；
+- HealthMiApp 直接创建 ModelContainer；
+- 依赖 SwiftData 的迁移模型。
+
+这组差异影响本地同步游标、压力记录和同步日志，不改变 HealthKit 请求类型或授权 API。当前 iOS 16.4 模拟器已能安装、启动并保持进程运行，说明 Core Data 改造没有造成一个“应用一启动就崩溃”的普遍问题；但它不能替代 iOS 16.3 真机的 HealthKit 授权验证。
+
+#### project.yml 与原版提交的 Xcode 工程存在漂移
+
+当前适配版 project.yml：
+
+    deploymentTarget: iOS 16.0
+    IPHONEOS_DEPLOYMENT_TARGET: 16.0
+    MARKETING_VERSION: 1.1.0
+
+原版 fork 的 project.yml：
+
+    deploymentTarget: iOS 17.0
+    IPHONEOS_DEPLOYMENT_TARGET: 17.0
+    MARKETING_VERSION: 1.1.0
+
+但是原版 fork 的 HealthMi.xcodeproj/project.pbxproj 仍然记录：
+
+    IPHONEOS_DEPLOYMENT_TARGET = 17.0
+    MARKETING_VERSION = 1.0.0
+    CODE_SIGN_ENTITLEMENTS = HealthMi/Support/HealthMi.entitlements
+    PRODUCT_BUNDLE_IDENTIFIER = com.healthmi.HealthMi
+
+这说明原版工作流构建的是仓库内已提交的 HealthMi.xcodeproj，不一定采用最新的 project.yml。原版构建出的 IPA 的 CFBundleShortVersionString 实际为 1.0.0，正好印证了这个工程文件漂移。
+
+### 9.3 两条 GitHub Actions 工作流的关键差异
+
+#### 原版 fork：.github/workflows/build-ipa.yml
+
+原版工作流直接执行：
+
+    xcodebuild -project HealthMi.xcodeproj
+      -scheme HealthMi
+      -configuration Release
+      -sdk iphoneos
+      -destination 'generic/platform=iOS'
+      CODE_SIGNING_ALLOWED=NO
+      CODE_SIGNING_REQUIRED=NO
+      CODE_SIGN_IDENTITY=""
+      build
+
+随后把 HealthMi.app 直接压入 HealthMi-unsigned.ipa。工作流没有：
+
+- xcodegen generate
+- Apple 证书或 provisioning profile
+- codesign
+- ldid
+- 最终 entitlement 检查
+
+#### 当前 iOS 16 适配版：.github/workflows/build-unsigned-ipa.yml
+
+当前工作流先运行：
+
+    brew install xcodegen
+    xcodegen generate
+
+再以 iOS 16 的 project.yml 生成工程并构建；但设备目标构建同样明确设置：
+
+    CODE_SIGNING_ALLOWED=NO
+    CODE_SIGNING_REQUIRED=NO
+    CODE_SIGN_IDENTITY=''
+
+当前工作流还检查 _CodeSignature 不存在，然后将应用打成未签名 IPA。也就是说，当前工作流比原版更能保证 project.yml 与生成工程同步，但两条工作流的共同点是：都没有交付一个已经带有效签名 entitlement 的 HealthKit IPA。
+
+### 9.4 原版 fork IPA 的实际包级核验
+
+已下载原版 fork 最近一次成功构建：
+
+    仓库: lu1ul/HealthMi
+    Workflow: build-ipa.yml
+    Run: 45047542713
+    Artifact: HealthMi-unsigned-IPA
+    本地文件: build/repo-compare/original-artifact/HealthMi-unsigned.ipa
+    SHA-256: 70500749969BD4F56F5F99901A5E518F898CD68048430DD1BF02E94572D1360C
+
+原版 IPA 实际内容：
+
+| 检查项 | 结果 |
+|---|---|
+| Payload/HealthMi.app/HealthMi | 存在 |
+| CFBundleIdentifier | com.healthmi.HealthMi |
+| CFBundleShortVersionString | 1.0.0 |
+| 主程序架构 | 64 位 arm64 Mach-O |
+| LC_CODE_SIGNATURE | 未发现 |
+| Payload/HealthMi.app/_CodeSignature/ | 不存在 |
+| embedded.mobileprovision | 不存在 |
+| 独立 .entitlements 文件 | 不存在 |
+| NSHealthShareUsageDescription | 存在 |
+| NSHealthUpdateUsageDescription | 存在 |
+| com.apple.developer.healthkit 的有效签名 entitlement | 未发现 |
+
+当前 iOS 16 适配版 GitHub IPA 的对照结果：
+
+    文件: build/github-run-45303591637/HealthMi-unsigned.ipa
+    SHA-256: 48A595AACF66D26829D8CE41109EC59FC81115098C933E6D9A16B81C16D004A2
+    Bundle ID: com.healthmi.HealthMi
+    版本: 1.1.0
+    主程序: 64 位 arm64 Mach-O
+    LC_CODE_SIGNATURE: 未发现
+    _CodeSignature: 不存在
+    embedded.mobileprovision: 不存在
+    有效签名 entitlement: 未发现
+
+用户指定的本地 iOS 16 修复版 IPA 也保持同一结论：
+
+    文件: build/HealthMi-unsigned-ipa-after-ios16-fix/HealthMi-unsigned-ipa/HealthMi-unsigned.ipa
+    SHA-256: 88198DBF1A140E88553CC9A6B2B7584127456888EF23264F5DA80E6027083716
+
+### 9.5 对“原版能用、当前版不能用”的证据解释
+
+当前已排除的解释：
+
+1. 不是 HealthKit 源文件差异。三份 HealthKit 相关源码和两个用途说明文件一致。
+2. 不是 Bundle ID 差异。两份 IPA 都是 com.healthmi.HealthMi。
+3. 不是工程 entitlement 文件是否存在的差异。两边工程都包含 HealthMi.entitlements 并声明 com.apple.developer.healthkit = true。
+4. 不能把“原版工作流成功”当作“原版 IPA 带 entitlement”。实际下载并解析的原版 artifact 没有 LC_CODE_SIGNATURE，也没有可提取的有效 entitlement。
+5. 不能仅以 iOS 16.3 与 iOS 27 的系统版本差异定责。目前没有同一份、已核验 entitlement 的 IPA 在两个系统版本上的对照实验；而用户所说的“iOS 27”也没有设备日志或安装包证据对应到本次下载的 artifact。
+
+最合理的解释按优先级排序：
+
+#### P0-A：用户实际安装的“原版 IPA”不是本次下载的 unsigned artifact
+
+这是目前最需要确认的事实。原版 GitHub artifact 的包级证据显示它没有有效签名 entitlement；如果原版在用户设备上确实能出现在“健康”App 来源并弹出授权表单，则用户安装的原版很可能经过了另一个步骤，例如：
+
+- 在安装前使用 ldid 或其他工具对主程序重新签名；
+- 通过另一条没有提交到当前 fork 的工作流产生；
+- 使用了本地 Xcode/开发者签名构建；
+- 从不同的 GitHub run 或其他发布文件安装。
+
+仅凭文件名 HealthMi-unsigned.ipa 不能确认它与用户手机当前安装的包是同一个二进制。
+
+#### P0-B：当前 IPA 在交给 TrollStore 前没有把 HealthKit entitlement 写入主程序
+
+TrollStore 官方说明要求把 entitlement 通过 ldid -S<entitlements.plist> 伪签进 IPA 内的主二进制，安装时才会保留这些 entitlement。当前两个 GitHub workflow 都没有执行 ldid，而本次检查的两个 artifact 也没有签名 load command。因此，如果当前 IPA 是直接下载后交给 TrollStore，HealthKit entitlement 缺失仍是最高概率原因。
+
+#### P1：授权错误被界面静默吞掉
+
+当前和原版都在权限按钮使用：
+
+    Task { try? await model.requestHealthKit() }
+
+如果系统返回 entitlement、授权状态或其他 HKError，用户都会看到“没有反应”。这解释了为什么当前界面无法帮助区分“请求根本没到 HealthKit”和“请求到达后失败”。该问题是共同代码缺陷，但当前适配版更需要先修复，因为它阻碍定位 Core Data/系统版本/签名差异。
+
+#### P2：已有授权状态导致系统不再显示表单
+
+Apple 的授权规则允许在用户已经对本次请求的全部数据类型作出允许或拒绝决定后，直接返回而不再次显示表单。完成授权请求后，应用应能在“健康”App 的来源列表中找到，即使用户拒绝了所有类型。因此“无弹窗”本身不是定责证据；“无弹窗且来源列表完全没有 HealthMi”更支持请求因签名/entitlement/安装包处理失败，或用户检查的不是当前 Bundle ID 对应的应用。
+
+### 9.6 当前结论
+
+截至 2026-11-24，证据链可以支持以下结论：
+
+- lu1ul/HealthMi-private 已成功改为公开仓库。
+- iOS 16 适配版的 Core Data 改造不是 HealthKit 类型、用途说明或 Bundle ID 方面的差异。
+- 原版 fork 的源码仍是 iOS 17 + SwiftData；它的 GitHub IPA workflow 也明确生成 unsigned IPA。
+- 原版 fork 最近成功 artifact 的实际二进制同样没有 LC_CODE_SIGNATURE 或 HealthKit entitlement。
+- 因此，“原版在用户设备可用”与“本次下载的原版 unsigned artifact 的静态内容”存在事实缺口；必须取得用户实际安装的原版 IPA，或从手机导出已安装的 HealthMi 主程序后检查 entitlement，才能把差异落到具体环节。
+- 当前 iOS 16.3 设备上“健康 App 没有 HealthMi”的首要排查点仍是：安装前/安装后主程序是否含 com.apple.developer.healthkit = true，以及按钮是否把真实 HKError 显示出来。
+- 不能把“iOS 16.3 本身不支持 HealthKit”作为解释；当前源码使用的 HealthKit API 并非因为最低部署版本改成 16.0 就自动失效。真正未验证的是设备上最终安装二进制的签名和 TrollStore 后处理结果。
+
+### 9.7 建议的下一步验证顺序
+
+1. 核对用户实际安装的原版包。分别记录原版和当前版的 IPA SHA-256、Bundle ID、版本号；不要只看文件名。
+2. 检查最终 entitlement。
+   - macOS/Xcode：codesign -d --entitlements :- Payload/HealthMi.app/HealthMi
+   - 已安装到越狱设备后，用 ldid -e /path/to/HealthMi 或同等工具导出 entitlement。
+   - 重点确认 com.apple.developer.healthkit = true。
+3. 将当前按钮错误显示出来。把 try? 改成 do/catch，在 UI 和日志中显示 error.localizedDescription 及 HKError code。
+4. 在 workflow 中增加硬性包检验。
+   - TrollStore 产物：运行 ldid 后再打包，并在 CI 中检查 LC_CODE_SIGNATURE 与 entitlement。
+   - Apple 签名产物：使用证书/profile 构建，使用 codesign 验证最终签名。
+   - unsigned 产物必须在 artifact 名称中明确标记为不能直接证明 HealthKit entitlement。
+5. 最后再比较 iOS 16.3 与 iOS 27。必须使用同一个经过 entitlement 核验的 IPA，分别记录授权请求结果；否则系统版本差异和包差异无法分离。
