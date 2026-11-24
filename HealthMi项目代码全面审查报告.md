@@ -860,3 +860,35 @@ Apple 的授权规则允许在用户已经对本次请求的全部数据类型�
    - Apple 签名产物：使用证书/profile 构建，使用 codesign 验证最终签名。
    - unsigned 产物必须在 artifact 名称中明确标记为不能直接证明 HealthKit entitlement。
 5. 最后再比较 iOS 16.3 与 iOS 27。必须使用同一个经过 entitlement 核验的 IPA，分别记录授权请求结果；否则系统版本差异和包差异无法分离。
+
+### 9.8 本轮修复与本地提交记录（2026-11-24）
+
+本轮已完成并在本地提交以下变更：
+
+1. **权限按钮错误反馈**
+   - 提交：`556f8a0 fix: show HealthKit authorization errors`
+   - `AppModel` 增加 `healthKitError`，请求失败时保留 `HKError` 的 domain、code 和可读描述。
+   - 仪表盘 Apple 健康区域显示错误信息；登录引导页也不再用 `try?` 静默吞掉请求失败。
+   - 该变更只改善诊断和用户反馈，不会绕过系统权限或伪造授权状态。
+
+2. **TrollStore HealthKit IPA 工作流**
+   - 提交：`b71ad8f ci: build TrollStore HealthKit IPA`
+   - `.github/workflows/build-unsigned-ipa.yml` 仍保留 `HealthMi-unsigned-ipa` 对照产物。
+   - GitHub `macos-15` runner 安装 Homebrew `ldid`，对构建出的 `HealthMi` 主程序执行 `ldid -S<entitlements.plist>`，再生成 `HealthMi-trollstore-healthkit.ipa`。
+   - 工作流在打包前和解包后都检查：
+     - `LC_CODE_SIGNATURE` 存在；
+     - `com.apple.developer.healthkit = true`；
+     - `NSHealthShareUsageDescription` 和 `NSHealthUpdateUsageDescription` 存在；
+     - 主程序包含 `arm64` 架构；
+     - Bundle ID 与默认值或手动输入值一致。
+   - `build/entitlement-report.txt` 会随 `HealthMi-trollstore-healthkit-ipa` artifact 一起上传，报告 IPA 和主程序 SHA-256。
+
+3. **产物边界**
+   - `HealthMi-unsigned.ipa` 只用于对照，不能据此证明 HealthKit entitlement 已写入。
+   - `HealthMi-trollstore-healthkit.ipa` 是给 TrollStore 安装的伪签名/签名块产物，不是 App Store、TestFlight 或普通未越狱设备使用的 Apple Developer distribution 包。
+   - 手机端不需要手工执行 `ldid`；只需安装工作流生成的 TrollStore IPA。为避免旧安装包和授权状态干扰，验证时应先删除旧版 HealthMi，再安装新包。
+
+4. **验证状态与限制**
+   - 本地 Windows 环境已完成 workflow 差异检查和 `git diff --check`；没有 macOS 的 `xcodebuild`、`ldid`、`otool` 工具链，因此尚未在本机模拟 GitHub runner 的最终打包。
+   - 当前尚未把这些提交推送到 `lu1ul/HealthMi-private`，所以 GitHub Actions 尚未产生本轮新的 artifact。推送后必须以 Actions 日志中的 entitlement 检查和 `entitlement-report.txt` 为准。
+   - CI 静态检查通过后，仍需在用户的 iOS 16.3 + TrollStore 设备上验证：安装来源是否出现 HealthMi、请求按钮是否显示系统授权表单，以及拒绝/允许后的 `HKAuthorizationStatus` 和同步行为。
