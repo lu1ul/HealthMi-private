@@ -9,4 +9,5 @@ enum AppLog {
     static let syncStateStore = Logger(subsystem: subsystem, category: "SyncStateStore")
     static let stressStore = Logger(subsystem: subsystem, category: "StressStore")
     static let syncLogStore = Logger(subsystem: subsystem, category: "SyncLogStore")
+    static let syncRunStore = Logger(subsystem: subsystem, category: "SyncRunStore")
 }

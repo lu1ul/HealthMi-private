@@ -13,7 +13,7 @@ enum BackgroundSync {
     @MainActor private static var didRegister = false
 
     @MainActor
-    static func register(syncHandler: @escaping @MainActor () async -> Bool) {
+    static func register(syncHandler: @escaping @MainActor () async -> SyncRunStatus) {
         guard !didRegister else { return }
         didRegister = true
         BGTaskScheduler.shared.register(forTaskWithIdentifier: taskIdentifier, using: nil) { task in
@@ -22,29 +22,41 @@ enum BackgroundSync {
                 return
             }
             schedule()
+            var didComplete = false
+            func complete(_ success: Bool) {
+                guard !didComplete else { return }
+                didComplete = true
+                refreshTask.setTaskCompleted(success: success)
+            }
+
             refreshTask.expirationHandler = {
                 // 系统即将挂起进程，取消正在进行的同步
                 Task { @MainActor in
                     syncTask?.cancel()
                 }
-                refreshTask.setTaskCompleted(success: false)
+                complete(false)
             }
             syncTask = Task { @MainActor in
-                let succeeded = await syncHandler()
-                guard !Task.isCancelled else { return }
-                refreshTask.setTaskCompleted(success: succeeded)
+                let status = await syncHandler()
+                guard !Task.isCancelled else {
+                    complete(false)
+                    syncTask = nil
+                    return
+                }
+                complete(status == .succeeded)
                 syncTask = nil
             }
         }
     }
 
-    static func schedule() {
+    static func schedule(immediate: Bool = false) throws {
         let request = BGAppRefreshTaskRequest(identifier: taskIdentifier)
-        request.earliestBeginDate = Date(timeIntervalSinceNow: 60 * 60)
+        request.earliestBeginDate = Date(timeIntervalSinceNow: immediate ? 1 : 60 * 60)
         do {
             try BGTaskScheduler.shared.submit(request)
         } catch {
             AppLog.backgroundSync.error("后台同步调度失败：\(error.localizedDescription)")
+            throw error
         }
     }
 }

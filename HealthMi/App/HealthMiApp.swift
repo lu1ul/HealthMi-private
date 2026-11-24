@@ -88,15 +88,35 @@ struct HealthMiApp: App {
     init() {
         // BGTask 处理器必须在进程启动时注册，不能依赖 SwiftUI 场景先出现。
         BackgroundSync.register {
+            let claim: (record: SyncRunRecord, shouldRun: Bool)
+            do {
+                claim = try SyncRunStore.claimForBackground()
+            } catch {
+                AppLog.backgroundSync.error("创建后台同步运行记录失败：\(error.localizedDescription)")
+                return .failed
+            }
+
+            guard claim.shouldRun else { return .succeeded }
+            let run = claim.record
+
             do {
                 let container = try await AppDatabase.shared.prepare()
                 let backgroundModel = AppModel()
                 backgroundModel.bootstrap()
-                await backgroundModel.syncAll(modelContext: container.viewContext, isBackground: true)
-                return backgroundModel.lastError == nil
+                let status = await backgroundModel.syncAll(
+                    modelContext: container.viewContext,
+                    isBackground: true,
+                    runID: run.id
+                )
+                return status
             } catch {
                 AppLog.backgroundSync.error("后台数据库准备失败：\(error.localizedDescription)")
-                return false
+                let details = SyncErrorDetails.from(error)
+                try? SyncRunStore.finish(id: run.id, status: .failed, topLevelError: details)
+                if let record = SyncRunStore.record(for: run.id) {
+                    await NotificationManager.notifySyncResult(record)
+                }
+                return .failed
             }
         }
     }
@@ -129,7 +149,8 @@ struct HealthMiApp: App {
             model.bootstrap()
             await NotificationManager.requestAuthorization()
             databaseReady = true
-            BackgroundSync.schedule()
+            let hasQueuedRun = (try? SyncRunStore.active()?.status == .queued) ?? false
+            try? BackgroundSync.schedule(immediate: hasQueuedRun)
         } catch {
             databaseError = error.localizedDescription
         }

@@ -176,18 +176,32 @@ final class AppModel: ObservableObject {
 
     /// - Parameters:
     ///   - forceBackfill: 为 true 时忽略增量游标，按 `backfillDays` 重新回填历史。
-    ///   - isBackground: 是否为后台同步触发（失败时发送本地通知）。
-    func syncAll(modelContext: NSManagedObjectContext, forceBackfill: Bool = false, isBackground: Bool = false) async {
+    ///   - isBackground: 是否为后台同步触发（完成后发送本地通知）。
+    ///   - runID: 后台或快捷指令排队创建的运行 ID；前台手动同步可以不传。
+    @discardableResult
+    func syncAll(
+        modelContext: NSManagedObjectContext,
+        forceBackfill: Bool = false,
+        isBackground: Bool = false,
+        runID: UUID? = nil
+    ) async -> SyncRunStatus {
         guard Self.syncActivity.withLock({ state in
             if state { return false }
             state = true
             return true
         }) else {
             statusMessage = "已有同步在进行中，已跳过本次触发"
-            return
+            let error = SyncErrorDetails.make(
+                domain: "HealthMi.Sync",
+                code: 409,
+                message: "已有同步在进行中，已跳过本次触发"
+            )
+            finishRun(runID, status: .failed, topLevelError: error)
+            return .failed
         }
         defer { Self.syncActivity.withLock { $0 = false } }
 
+        markRunRunning(runID)
         isSyncing = true
         lastError = nil
         defer { isSyncing = false }
@@ -197,17 +211,28 @@ final class AppModel: ObservableObject {
         // 检查用户是否在系统设置中撤销了权限
         refreshHealthKitStatus()
         guard healthKitAuthorized else {
-            lastError = "HealthKit 写入权限未授权，请在 设置 → 健康 → 数据访问 中允许 HealthMi"
+            let message = "HealthKit 写入权限未授权，请在 设置 → 健康 → 数据访问 中允许 HealthMi"
+            let error = SyncErrorDetails.make(
+                domain: HKErrorDomain,
+                code: HKError.Code.errorAuthorizationDenied.rawValue,
+                message: message
+            )
+            lastError = message
             statusMessage = "❌ HealthKit 权限未授权"
-            return
+            finishRun(runID, status: .failed, topLevelError: error)
+            await notifyRunIfNeeded(runID: runID, fallbackError: message, isBackground: isBackground)
+            return .failed
         }
 
         do {
             try await ensureEngine()
         } catch {
-            lastError = error.localizedDescription
-            statusMessage = "❌ \(error.localizedDescription)"
-            return
+            let details = SyncErrorDetails.from(error)
+            lastError = details.message
+            statusMessage = "❌ \(details.message)"
+            finishRun(runID, status: .failed, topLevelError: details)
+            await notifyRunIfNeeded(runID: runID, fallbackError: details.message, isBackground: isBackground)
+            return .failed
         }
 
         var messages: [String] = []
@@ -215,10 +240,16 @@ final class AppModel: ObservableObject {
         totalSyncCount = types.count
         currentSyncIndex = 0
         await engine?.clearCache()
+        var successCount = 0
+        var failureCount = 0
+        var cancelled = false
         for type in types {
             currentSyncIndex += 1
             // 后台同步被系统取消时，尽早退出
-            if Task.isCancelled { break }
+            if Task.isCancelled {
+                cancelled = true
+                break
+            }
             do {
                 let highWater = try SyncStateStore.state(for: type, in: modelContext)?.lastSyncedEnd
                 if type == .stress {
@@ -244,6 +275,8 @@ final class AppModel: ObservableObject {
                         )
                         outcomes[.stress] = outcome
                         messages.append("压力 +\(added)")
+                        successCount += 1
+                        recordRunSuccess(runID, type: .stress, fetched: result.samples.count, added: added)
                         SyncLogStore.append(
                             type: .stress, fetched: result.samples.count,
                             added: added, success: true, in: modelContext
@@ -261,6 +294,8 @@ final class AppModel: ObservableObject {
                         )
                         outcomes[type] = outcome
                         messages.append("\(type.displayName) +\(outcome.added)")
+                        successCount += 1
+                        recordRunSuccess(runID, type: type, fetched: outcome.fetched, added: outcome.added)
                         SyncLogStore.append(
                             type: type, fetched: outcome.fetched,
                             added: outcome.added, success: true, in: modelContext
@@ -271,6 +306,8 @@ final class AppModel: ObservableObject {
                 let message = "\(type.displayName)：\(Self.describeSyncError(error))"
                 lastError = message
                 messages.append("\(type.displayName) ❌")
+                failureCount += 1
+                recordRunFailure(runID, type: type, error: SyncErrorDetails.from(error))
                 SyncLogStore.append(
                     type: type, fetched: 0, added: 0,
                     success: false, errorMessage: Self.describeSyncError(error), in: modelContext
@@ -281,9 +318,71 @@ final class AppModel: ObservableObject {
         refreshHealthKitStatus()
         // 同步完成后刷新 App 内数据概览
         await refreshSummary()
-        // 后台同步失败时发送本地通知
-        if isBackground, let lastError {
-            await NotificationManager.notifySyncFailure(lastError)
+        let finalStatus: SyncRunStatus
+        if cancelled {
+            statusMessage = statusMessage.isEmpty ? "同步已取消" : "\(statusMessage)  已取消"
+            finalStatus = .cancelled
+        } else if failureCount == 0 {
+            finalStatus = .succeeded
+        } else if successCount > 0 {
+            finalStatus = .partialFailure
+        } else {
+            finalStatus = .failed
+        }
+        let topLevelError = cancelled
+            ? SyncErrorDetails.make(
+                domain: "HealthMi.Sync",
+                code: 499,
+                message: "同步任务在完成前被取消。"
+            )
+            : nil
+        finishRun(runID, status: finalStatus, topLevelError: topLevelError)
+        await notifyRunIfNeeded(runID: runID, fallbackError: lastError, isBackground: isBackground)
+        return finalStatus
+    }
+
+    private func markRunRunning(_ runID: UUID?) {
+        guard let runID else { return }
+        do {
+            try SyncRunStore.markRunning(runID)
+        } catch {
+            AppLog.syncRunStore.error("更新同步运行状态失败：\(error.localizedDescription)")
+        }
+    }
+
+    private func recordRunSuccess(_ runID: UUID?, type: SyncDataType, fetched: Int, added: Int) {
+        guard let runID else { return }
+        do {
+            try SyncRunStore.recordSuccess(id: runID, type: type, fetched: fetched, added: added)
+        } catch {
+            AppLog.syncRunStore.error("保存同步成功结果失败：\(error.localizedDescription)")
+        }
+    }
+
+    private func recordRunFailure(_ runID: UUID?, type: SyncDataType, error: SyncErrorDetails) {
+        guard let runID else { return }
+        do {
+            try SyncRunStore.recordFailure(id: runID, type: type, error: error)
+        } catch {
+            AppLog.syncRunStore.error("保存同步失败结果失败：\(error.localizedDescription)")
+        }
+    }
+
+    private func finishRun(_ runID: UUID?, status: SyncRunStatus, topLevelError: SyncErrorDetails? = nil) {
+        guard let runID else { return }
+        do {
+            try SyncRunStore.finish(id: runID, status: status, topLevelError: topLevelError)
+        } catch {
+            AppLog.syncRunStore.error("保存同步运行终态失败：\(error.localizedDescription)")
+        }
+    }
+
+    private func notifyRunIfNeeded(runID: UUID?, fallbackError: String?, isBackground: Bool) async {
+        guard isBackground else { return }
+        if let runID, let record = SyncRunStore.record(for: runID) {
+            await NotificationManager.notifySyncResult(record)
+        } else if let fallbackError {
+            await NotificationManager.notifySyncFailure(fallbackError)
         }
     }
 
