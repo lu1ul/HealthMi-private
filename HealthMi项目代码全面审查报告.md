@@ -109,9 +109,9 @@ DashboardView 的 try? 吞掉错误
 
 ## 五、项目代码审查发现
 
-以下按影响分级。它们是静态审查结论，尚未通过本轮运行测试确认；本节不代表它们都造成了当前 HealthKit 弹窗故障。
+以下按修复影响统一排序：P1 优先处理会阻断核心功能或造成数据丢失、错写的缺陷；P2 处理数据准确性、账号隔离、同步可靠性与诊断问题；P3 处理较低频边界、日志和文档问题。原有 H/S/CI/DOC 标识保留，Python 项目新增 PY1–PY7 标识。以下问题均为静态审查发现，尚未通过本轮运行测试确认；本节不代表它们都造成当前 HealthKit 弹窗故障。
 
-### A. HealthKit 与界面诊断
+### P1｜阻断核心功能或可能造成数据丢失、错写
 
 #### H1｜P1：设备 IPA 工作流没有交付 HealthKit entitlement
 
@@ -134,26 +134,6 @@ DashboardView 的 try? 吞掉错误
 
 **重复请求行为：**Apple 文档说明，若用户此前已对请求中的全部类型作出决定，系统可以不再显示授权表单；完成过授权请求后，应用仍会列在“健康”App 的“来源”页，即使用户拒绝所有权限。因此必须区分“此前已处理、系统正常不再弹窗”和“当前请求没有成功到达 HealthKit”。当前代码没有调用 `getRequestStatusForAuthorization`，而 `try?` 又隐藏调用错误。排查时应在“健康”App 的“来源”页确认当前应用，并核对实际 Bundle ID 与正在检查的构建一致。[Apple：授权请求行为](https://developer.apple.com/documentation/healthkit/hkhealthstore/requestauthorization%28toshare%3Aread%3Acompletion%3A%29)；[Apple：请求状态 API](https://developer.apple.com/documentation/healthkit/hkhealthstore/getrequeststatusforauthorization%28toshare%3Acompletion%3A%29)
 
-#### H3｜P2：授权状态指示器只检查步数写入权限
-
-**位置：** `HealthMi/App/AppModel.swift:130-139`
-
-`healthKitAuthorized` 通过 `HKQuantityType(.stepCount)` 的 `authorizationStatus` 得出一个全局“已授权/未授权”。这个状态只能说明该类型的写入状态，不能说明其它写入类型或读取权限状态；尤其不能用它判断用户是否允许读取既有健康数据。
-
-**影响：**界面可能显示“未授权”，即使用户已允许部分类型；也可能给“读取权限”造成误导。它不是导致系统弹窗缺失的直接原因，但会干扰定位。
-
-**建议：**UI 将“请求是否成功调用”“写入样本是否成功”与“读取是否返回数据”分开表达；不要声称能从 HealthKit 查询到用户的读取授权开关。
-
-#### H4｜P2：HealthKit 读取错误被折叠成空数据
-
-**位置：** `HealthMi/Health/HealthKitReader.swift:25-55, 82-115`
-
-摘要与趋势查询多处用 `try?`，发生授权、entitlement 或查询错误时就返回 `nil` / 空数组。界面显示“—”或“暂无趋势数据”，难以区分确实无数据与查询失败。
-
-**建议：**保留查询错误并在界面区分“无样本”“未授权/不可用”“查询失败”。这对 HealthKit 排查很重要，但应排在补上 entitlement 和按钮错误反馈之后。
-
-### B. iOS App 同步与数据一致性
-
 #### S1｜P1：缺少或不完整的 API 分页字段会被当作成功并推进游标
 
 **位置：** `HealthMi/MiFitness/MiAPIClient.swift:181-189, 210-217, 239-247`、`HealthMi/Sync/SyncEngine.swift:105-120, 253`
@@ -170,70 +150,6 @@ DashboardView 的 try? 吞掉错误
 
 **建议：**整数文本直接用可失败的 `Int(s)` 解析；若协议确实允许小数，先检查数值为 finite 且位于目标整数范围，再按明确规则转换。无效数值应返回 `nil` 并让协议校验失败，不要静默变成 0。
 
-#### S3｜P2：切换小米账号不会清理 HealthKit 中旧账号记录，external UUID 又不含账号
-
-**位置：** `HealthMi/Health/TypeMapper.swift:19-35, 43-54, 190`、`HealthMi/MiFitness/MiModels.swift:33, 75, 81, 119`、`HealthMi/App/AppModel.swift:107-117`
-
-应用退出账号时会清除本地游标/压力/日志，但不会删除 HealthKit 中旧样本。若之后换账号，步数 UUID 按日期生成，心率/血氧/体重 UUID 按整秒时间生成，运动 UUID 按 workoutId 生成，均没有账号命名空间。新账号若同一时间有记录，会被旧 UUID 去重；不同账号的值也可能继续并存在 HealthKit。
-
-**建议：**决定账号切换语义；至少让应用生成的 external UUID 稳定包含账号作用域，或提供清楚的数据保留/清理行为。注意不能自动删除用户自己或其它来源写入的 HealthKit 数据。
-
-#### S4｜P2：区域时区固定 UTC 偏移，日期计算不统一
-
-**位置：** `HealthMi/MiFitness/MiRegion.swift:18-29`、`HealthMi/Sync/SyncEngine.swift:64-75, 148-165`、`HealthMi/Health/TypeMapper.swift:246-258`、`HealthMi/Health/HealthKitReader.swift:51-53`；Python 对照 `tools/mi-fitness-mcp-cn/src/mi_fitness_mcp/adapters/mi_fitness_cloud.py:271-283` 和 `tools/mi-fitness-mcp-cn/src/mi_fitness_mcp/config.py:19-25`
-
-欧洲固定 UTC+1、美国固定 UTC−8，无法涵盖夏令时与多时区；API 窗口、按区域映射日样本、HealthKit 读回趋势又混用设备当前 Calendar。跨时区或 DST 日期附近可能错日、窗口重叠或趋势错位。`TypeMapper.calendar` 还是静态缓存，启动后切换地区时不会重建。另一个跨实现差异是 Python adapter 只对 `cn` 使用 UTC+8，所有非 `cn` 区域都用 UTC；Swift 则对 `ru/de/us` 使用 UTC+3/+1/−8。相同非中国区日期字符串会生成不同的 API epoch 查询窗口。Python 的 `config.timezone` 目前只由 `get_profile` 回传，没有参与窗口换算。仅凭仓库代码无法确定哪套边界符合小米服务端的地区约定，但两套实现的输出不等价。
-
-**建议：**使用带 DST 规则的 IANA 时区，明确统一日界线的业务时区；让 Swift 与 Python 按相同规则计算请求窗口；区域变化时重建相关 Calendar。先用包含 `zone_offset`、`zone_name` 和日边界附近样本的脱敏记录确认服务端约定。
-
-#### S5｜P2：API 同步过程中 token 失效时连接状态可能仍显示正常
-
-**位置：** `HealthMi/MiFitness/MiAPIClient.swift:41-45`、`HealthMi/App/AppModel.swift:296-313, 324-328`
-
-API 客户端识别 `code=70016`，但 `AppModel.isAuthError` 只识别登录阶段的 `MiLoginError.loginRejected`。已经连接后在数据接口遇到 `MiAPIError.api(code:70016)`，会记一类数据同步失败，却不一定设置 `authNeedsRefresh` 或更新 `connected` 状态。
-
-**建议：**同步错误统一映射登录/令牌失效状态，在界面明确要求刷新凭据；避免重复重试永久失效的 token。
-
-#### S6｜P2：取消请求时重试与分页等待可能继续运行
-
-**位置：** `HealthMi/MiFitness/MiAPIClient.swift:105-127, 222, 251`；`HealthMi/Sync/BackgroundSync.swift:23-37`；`HealthMi/App/SyncIntent.swift:26-31`
-
-退避和分页间隔使用 `try? Task.sleep`，取消错误会被忽略；网络错误又被统一包装为可重试错误。快捷指令超时或系统后台任务过期时，任务可能继续进入下一轮请求，而不是及时结束。
-
-**建议：**对 `CancellationError` 立即向上传播；分页循环前检查取消状态；后台任务确保完成回调仅由一个路径负责。
-
-#### S7｜P2：运动写入在关联心率失败时可能留下“已保存但不完整”的 workout
-
-**位置：** `HealthMi/Health/HealthWriter.swift:47-90`、`HealthMi/Sync/SyncEngine.swift:228-253`
-
-代码先 `finishWorkout()` 保存 workout，之后才通过 `store.add` 加入平均/最大心率。若后续加入失败，方法抛错；重试时 `existingExternalIDs` 已能找到该 workout，正常增量会跳过，不会自动补写缺失关联心率。
-
-**建议：**把运动和关联样本的恢复语义设计为可重试/可修复，或者将不完整状态记录下来供重试；用模拟 `store.add` 失败的测试覆盖。
-
-#### S8｜P3：HealthKit 分页遇到同一开始时间超过页长时可能不前进
-
-**位置：** `HealthMi/Health/HealthWriter.swift:17-39, 130-157`
-
-分页锚点仅取最后一个样本的 `startDate`，下一页查询包含该边界（`>= anchor`）。若超过 1000 条样本共享相同开始时间，锚点可能不变，查询重复相同一页。
-
-**建议：**使用可严格推进的分页游标/查询机制；至少为大量同时间戳样本增加终止保护与回归测试。
-
-#### S9｜P3：凭据先写入 Keychain、后验证登录
-
-**位置：** `HealthMi/App/AppModel.swift:95-105`
-
-`saveCredentials` 先保存 userId/passToken，再连接小米 API。若验证失败，凭据仍会留在 Keychain；下次启动 `bootstrap()` 只要读到凭据就会将 `isConfigured` 设为 true。
-
-**建议：**先验证临时凭据，再保存成功的会话；或登录失败后回滚新写入值。
-
-#### S10｜P3：用户关闭所有同步类型后重启会恢复全选
-
-**位置：** `HealthMi/App/AppModel.swift:48-50, 71-92`
-
-`loadEnabledTypes()` 只有在持久化集合非空时才覆盖默认值。用户有意清空全部类别时，空数组会被解释为“没有设置过”，重启后恢复全部类型。
-
-**建议：**区分“键不存在”与“键存在但数组为空”。
-
 #### S11｜P1：强制回填先删除旧 HealthKit 样本，后写入失败会造成数据缺口
 
 **位置：** `HealthMi/Sync/SyncEngine.swift:90-107, 233-249`
@@ -241,30 +157,6 @@ API 客户端识别 `code=70016`，但 `AppModel.isAuthError` 只识别登录阶
 `forceBackfill` 对普通健康样本先按 external UUID 删除 HealthKit 中范围内的旧记录，再调用 `writer.save` 写入新记录。删除成功但新样本保存失败时，旧记录已丢失，本次同步会报错且游标不会前进。运动回填同样先删除旧 workout 和关联心率，再调用 `saveWorkout`。删除和保存不是本项目可包成单个事务的操作，因此当前顺序存在可见的数据丢失窗口。
 
 **建议：**为回填设计可恢复的两阶段替换：先确认完整的新数据和可写入状态，再替换旧样本；若 HealthKit 接口要求先删后写，需保留足以恢复旧样本的内容或记录补偿任务。重点覆盖“删除成功、保存失败”和 workout 已保存但关联心率写入失败。
-
-#### S12｜P2：强制回填不会清理上游已消失的数据
-
-**位置：** `HealthMi/Sync/SyncEngine.swift:88-118, 228-253`
-
-普通类型只在 `fetchAndMap` 返回的 `groups` 上执行回填删除。如果指定类型本次返回空集合，循环体不执行，HealthKit 中不再出现在小米响应里的旧记录仍会保留。运动回填也只对新响应里仍存在的 `draft` 删除和重写旧 workout，不会清理范围内已从云端消失的 workout。因此“全量重拉并重写”在空响应或已删除记录场景下实际只会重写当前仍返回的记录。
-
-**建议：**先确认 API 响应完整、分页结束且解析成功，再根据新旧 external UUID 集合差异做范围清理；协议错误或分页不完整时保留旧样本。
-
-#### S13｜P2：全局同步被步数写入权限统一拦截
-
-**位置：** `HealthMi/App/AppModel.swift:124-138, 184-194`
-
-`healthKitAuthorized` 只表示 `stepCount` 的 HealthKit 写入状态。`syncAll` 在同步任何数据类型前都要求它为 `true`，否则直接返回。用户即使只启用其它可写类型，也会因步数被拒绝而被全局阻止；压力数据本身存 Core Data、不写 HealthKit，却同样无法同步。
-
-**建议：**按启用的数据类型分别处理 HealthKit 写入失败；HealthKit 之外的数据（至少压力）不应依赖步数授权。界面状态应拆分为授权请求状态、步数写入状态和各类型的实际写入结果，避免一个状态代表所有权限。
-
-#### S14｜P2：未识别的睡眠阶段被默认伪装成浅睡
-
-**位置：** `HealthMi/MiFitness/MiParser.swift:113-123`
-
-当前只明确映射 state `2` 至 `5`，其余值（包括缺失或未来新增编码）全部返回 `.light`，再由 `TypeMapper` 写成 HealthKit `asleepCore`。这会把未知或异常记录伪造成有效浅睡样本，影响睡眠分期与统计。
-
-**建议：**让解析结果能表达未知或无效状态；未知分期应跳过或保留原始编码并记录诊断，避免默认映射为浅睡。用已确认的小米编码样例覆盖所有支持的状态值。
 
 #### S15｜P1：总卡路里被写成 HealthKit 活动能量
 
@@ -276,38 +168,6 @@ Swift 端先把 `steps` key 的 `calories` 累加到 `kcalFromSteps`，再把 `c
 
 **建议：**活动能量只从 `steps` 数据的活动 calories 计算；若产品需要总消耗，应在模型中单独保留，不映射到 `activeEnergyBurned`。先用脱敏的真实 API 响应或稳定样例确认字段语义，再修正 Swift 与 Python 的共同夹具和测试期望。此问题是代码/数据映射问题，不是 TrollStore 权限弹窗问题。
 
-#### S16｜P2：Swift App 与 Python 工具的睡眠阶段编码不一致
-
-**位置：** `HealthMi/MiFitness/MiParser.swift:113-123`；`tools/mi-fitness-mcp-cn/src/mi_fitness_mcp/adapters/mi_fitness_cloud.py:418-429`；Swift 测试见 `HealthMiTests/MiParserTests.swift:38-64`。
-
-Swift App 映射为 `2=deep, 3=light, 4=REM, 5=awake`；Python MCP 工具映射为 `1=deep, 2/3=light, 4=awake, 5=REM`。Swift 源码注释称其映射已按实际数据修正，Python 映射为旧版本，但仓库没有保留可复核的原始响应夹具或协议文档来独立判定哪套映射符合小米当前协议。Swift 测试只覆盖 `2/4/5`，没有覆盖 `3`、未知编码或与 Python 共享的样例；Python 测试也未覆盖该映射。
-
-**影响：**两个工具面对相同睡眠记录会输出不同阶段；若旧 Python 映射仍被下游使用，REM、深睡和清醒时长会错分。该差异不影响 HealthKit 授权弹窗，也不能仅凭代码断言 Swift 当前映射错误。
-
-**建议：**保存脱敏的真实云端睡眠记录作为黄金夹具，明确每个 state 的协议语义，并让 Swift 与 Python 共用同一组预期映射。未知值应保留为未知或跳过，不能默认伪装成浅睡（参见 S14）。
-
-#### S17｜P2：睡眠总时长的区间边界与按日归属未定义
-
-**位置：** `HealthMi/Health/HealthKitReader.swift:27-44, 50-84, 126-145, 168-182`。
-
-`summary(days:)` 从当前时刻向前回退日历天数，并把查询返回的每个睡眠样本完整时长相加；当前 `predicateForSamples` 调用没有启用 `strictStartDate` / `strictEndDate`，因此与所选区间相交的样本也会返回，跨越起始边界的样本会把区间外时长一并计入总量。趋势查询则把每段睡眠的完整分钟数归到 `sample.startDate` 所在日，没有按午夜切分；例如跨午夜的一段睡眠会全部落在开始日。是否应按“入睡夜晚”归属需要产品定义，但当前数据不能解释为严格的日历日睡眠分钟数。查询还会直接相加所有来源的睡眠样本，没有检查来源或重叠区间；若不同来源记录了重叠睡眠，也会重复累计。
-
-**影响：**最近 N 天摘要可能包含边界之外的睡眠；趋势图可能把整晚显示在入睡日；多来源重叠记录可能高估睡眠时长。实际误差取决于设备样本的时间范围和来源。
-
-**建议：**明确采用日历日切分还是睡眠夜归属；对查询区间边界裁剪样本时长，并按选定策略处理跨午夜区间。多来源样本需要有明确的来源优先级或重叠去重规则。Apple 将 `strictStartDate` / `strictEndDate` 定义为要求样本起止时间落在目标区间内的选项；当前调用未传这些严格选项，因此应按可能跨界返回的样本处理。
-
-#### S18｜P2：快捷指令/后台任务取消与完成路径没有统一收敛
-
-**位置：** `HealthMi/App/SyncIntent.swift:20-34`；`HealthMi/Sync/BackgroundSync.swift:25-37`；`HealthMi/App/AppModel.swift:209-212, 270-278`；重试等待见 `HealthMi/MiFitness/MiAPIClient.swift:105-127, 218-251`。
-
-快捷指令创建了独立 `Task` 执行 `syncAll`，只由 55 秒 watchdog 主动取消；代码没有把 `perform()` 调用方的取消显式传递给该任务。`syncAll` 检查到取消后只 `break` 数据类型循环，随后仍更新状态、刷新 HealthKit 摘要并可能发送通知。API 重试和分页等待用 `try? Task.sleep`，取消产生的错误被吞掉：重试等待取消后仍可能尝试下一次请求，分页等待取消后会直接进入下一页。
-
-后台刷新有两个完成入口：`expirationHandler` 异步安排取消并立即调用 `setTaskCompleted(false)`；同步任务正常返回后也调用 `setTaskCompleted(success:)`。两条路径没有共享的一次性完成门闩；若过期与同步结束并发，存在重复报告完成的竞态。取消分支在 `guard !Task.isCancelled else { return }` 处提前返回，也不会清空静态 `syncTask` 引用。
-
-**影响：**系统已过期或快捷指令调用方已取消后，仍可能继续做重试等待和 HealthKit 读取；后台任务可能出现重复完成报告或保留过期任务引用。此问题不解释授权表单/来源列表缺失。
-
-**建议：**让取消沿结构化任务传播；重试等待遇到取消立即抛出，循环每个请求边界都检查取消；`syncAll` 取消后尽早返回，不再运行摘要查询；后台任务用单一完成状态协调过期与正常完成，并通过 `defer` 清除任务引用。用“取消与同步完成同时发生”的测试验证完成回调只走一次。
-
 #### S19｜P1：增量同步会永久跳过已写入日期的更新值
 
 **位置：** `HealthMi/Health/TypeMapper.swift:12-39`；`HealthMi/Sync/SyncEngine.swift:64-75, 85-118`；`HealthMi/Health/HealthWriter.swift:15-37`。
@@ -317,6 +177,86 @@ Swift App 映射为 `2=deep, 3=light, 4=REM, 5=awake`；Python MCP 工具映射�
 **影响：**在当天中途触发同步后，HealthKit 中当天的总步数、距离和活动能量会停留在首次写入时的部分值；上游迟到或修正的相同记录也可能一直旧到用户手动强制回填。一天重叠窗口只能重新取数，不能修复去重策略。
 
 **建议：**对会变化的聚合/修正数据实施按 external UUID 的内容比较和安全替换，或明确延迟写入当天未完成的聚合数据并仍处理迟到修正。添加同一天连续两次返回不同计数的回归场景，确认最终 HealthKit 样本更新为新值。
+
+#### PY1｜P1：按用户隔离不完整，切换账号可能覆盖记录和共享游标
+
+**位置：** `tools/mi-fitness-mcp-cn/src/mi_fitness_mcp/storage/__init__.py:224-229, 294-307, 422-435, 462-474, 507-518`；适配器 ID 生成见 `adapters/mi_fitness_cloud.py:498-504, 700-709`
+
+`sync_state` 的唯一键只有 `data_type`，没有 `user_id`；多类记录以日期/秒级时间生成全局 `id`，部分 upsert 在 `ON CONFLICT(id)` 时更新指标但不更新 `user_id`。若一个 SQLite 库先后服务不同小米账号，游标会共享，碰撞记录也可能由一个账号的值覆盖而仍保留另一个账号的 user_id。
+
+**建议：**为同步游标加入用户作用域，并让记录主键/唯一约束及 upsert 策略一致地按用户隔离。
+
+### P2｜影响数据准确性、隔离性、同步可靠性或诊断
+
+#### H4｜P2：HealthKit 读取错误被折叠成空数据
+
+**位置：** `HealthMi/Health/HealthKitReader.swift:25-55, 82-115`
+
+摘要与趋势查询多处用 `try?`，发生授权、entitlement 或查询错误时就返回 `nil` / 空数组。界面显示“—”或“暂无趋势数据”，难以区分确实无数据与查询失败。
+
+**建议：**保留查询错误并在界面区分“无样本”“未授权/不可用”“查询失败”。这对 HealthKit 排查很重要，但应排在补上 entitlement 和按钮错误反馈之后。
+
+#### H3｜P2：授权状态指示器只检查步数写入权限
+
+**位置：** `HealthMi/App/AppModel.swift:130-139`
+
+`healthKitAuthorized` 通过 `HKQuantityType(.stepCount)` 的 `authorizationStatus` 得出一个全局“已授权/未授权”。这个状态只能说明该类型的写入状态，不能说明其它写入类型或读取权限状态；尤其不能用它判断用户是否允许读取既有健康数据。
+
+**影响：**界面可能显示“未授权”，即使用户已允许部分类型；也可能给“读取权限”造成误导。它不是导致系统弹窗缺失的直接原因，但会干扰定位。
+
+**建议：**UI 将“请求是否成功调用”“写入样本是否成功”与“读取是否返回数据”分开表达；不要声称能从 HealthKit 查询到用户的读取授权开关。
+
+#### S24｜P2：网页登录用子串匹配信任 Cookie 域名
+
+**位置：** `HealthMi/MiFitness/MiWebLogin.swift:20-31`；WebView 导航见 `HealthMi/App/MiWebLoginView.swift:124-125, 173-181, 209-216`；相关测试 `HealthMiTests/MiWebLoginTests.swift:45-70`。
+
+Cookie 提取条件是 `$0.domain.contains("account.xiaomi.com")`，而不是检查规范化后的域名是否为 `account.xiaomi.com` 或其合法子域。WebView 控制器把 `target=_blank` 也加载到同一个 WebView，未限制目标主机；如果浏览到 `account.xiaomi.com.attacker.example` 一类域名，该域也满足子串检查。该页面可设置同名 Cookie；`getAllCookies()` 会把多域名 Cookie 一并交给提取器，而代码会按返回顺序选取同名项。当前测试仅排除了完全不相关的 `example.com`，没有覆盖域名后缀伪装和同名 Cookie 冲突。
+
+**影响：**登录流程可能捕获并提交非小米账号域的伪造 `userId` / `passToken`，造成登录失败或凭据来源混淆。此问题需要用户被引导到或主动打开伪装域名才会触发；本轮没有验证实际 WebView 导航路径。
+
+**建议：**规范化 Cookie domain（去掉前导点、转小写），按域名标签边界做精确匹配；若仅需要登录主机，就只接受 `account.xiaomi.com`。同时限制 WebView 的外部导航，并增加 `account.xiaomi.com.attacker.example`、`notaccount.xiaomi.com` 及重复同名 Cookie 的测试。
+
+#### S3｜P2：切换小米账号不会清理 HealthKit 中旧账号记录，external UUID 又不含账号
+
+**位置：** `HealthMi/Health/TypeMapper.swift:19-35, 43-54, 190`、`HealthMi/MiFitness/MiModels.swift:33, 75, 81, 119`、`HealthMi/App/AppModel.swift:107-117`
+
+应用退出账号时会清除本地游标/压力/日志，但不会删除 HealthKit 中旧样本。若之后换账号，步数 UUID 按日期生成，心率/血氧/体重 UUID 按整秒时间生成，运动 UUID 按 workoutId 生成，均没有账号命名空间。新账号若同一时间有记录，会被旧 UUID 去重；不同账号的值也可能继续并存在 HealthKit。
+
+**建议：**决定账号切换语义；至少让应用生成的 external UUID 稳定包含账号作用域，或提供清楚的数据保留/清理行为。注意不能自动删除用户自己或其它来源写入的 HealthKit 数据。
+
+#### S29｜P2：缺失的记录时间被转换成 1970 年样本
+
+**位置：** `HealthMi/MiFitness/MiParser.swift:31-42, 130-145, 231-239, 293-301`。
+
+`recordDate(of:)` 和 `calendarDay(of:)` 都用 `item.time ?? 0` 填补缺失时间；静息心率解析也使用 `payload.date_time ?? item.time ?? 0`。因此 API 返回记录缺少时间字段时，心率、体重或日活动的其它有效数值不会被跳过，而可能被解析成 Unix epoch 附近的时间。`TypeMapper` 对心率/体重样本没有时间合理性校验，日活动则会按区域把 1970-01-01 映射为整日样本。若错误时间来自 `MiJSON.int` 对非法数字文本的兜底 0，也会出现相同结果（另见 S2）。
+
+**影响：**不完整 API 响应可能污染 Apple 健康的历史时间线；HealthKit 写入成功后，正常 external UUID 去重还会让错误时间样本长期保留。
+
+**建议：**让时间解析返回可失败结果；缺少必要时间字段的记录应跳过并计入解析告警，或使该页失败且不推进同步游标。增加缺少 `item.time`、非法时间文本、合法 Unix epoch 附近数据的边界测试。
+
+#### S4｜P2：区域时区固定 UTC 偏移，日期计算不统一
+
+**位置：** `HealthMi/MiFitness/MiRegion.swift:18-29`、`HealthMi/Sync/SyncEngine.swift:64-75, 148-165`、`HealthMi/Health/TypeMapper.swift:246-258`、`HealthMi/Health/HealthKitReader.swift:51-53`；Python 对照 `tools/mi-fitness-mcp-cn/src/mi_fitness_mcp/adapters/mi_fitness_cloud.py:271-283` 和 `tools/mi-fitness-mcp-cn/src/mi_fitness_mcp/config.py:19-25`
+
+欧洲固定 UTC+1、美国固定 UTC−8，无法涵盖夏令时与多时区；API 窗口、按区域映射日样本、HealthKit 读回趋势又混用设备当前 Calendar。跨时区或 DST 日期附近可能错日、窗口重叠或趋势错位。`TypeMapper.calendar` 还是静态缓存，启动后切换地区时不会重建。另一个跨实现差异是 Python adapter 只对 `cn` 使用 UTC+8，所有非 `cn` 区域都用 UTC；Swift 则对 `ru/de/us` 使用 UTC+3/+1/−8。相同非中国区日期字符串会生成不同的 API epoch 查询窗口。Python 的 `config.timezone` 目前只由 `get_profile` 回传，没有参与窗口换算。仅凭仓库代码无法确定哪套边界符合小米服务端的地区约定，但两套实现的输出不等价。
+
+**建议：**使用带 DST 规则的 IANA 时区，明确统一日界线的业务时区；让 Swift 与 Python 按相同规则计算请求窗口；区域变化时重建相关 Calendar。先用包含 `zone_offset`、`zone_name` 和日边界附近样本的脱敏记录确认服务端约定。
+
+#### S7｜P2：运动写入在关联心率失败时可能留下“已保存但不完整”的 workout
+
+**位置：** `HealthMi/Health/HealthWriter.swift:47-90`、`HealthMi/Sync/SyncEngine.swift:228-253`
+
+代码先 `finishWorkout()` 保存 workout，之后才通过 `store.add` 加入平均/最大心率。若后续加入失败，方法抛错；重试时 `existingExternalIDs` 已能找到该 workout，正常增量会跳过，不会自动补写缺失关联心率。
+
+**建议：**把运动和关联样本的恢复语义设计为可重试/可修复，或者将不完整状态记录下来供重试；用模拟 `store.add` 失败的测试覆盖。
+
+#### S12｜P2：强制回填不会清理上游已消失的数据
+
+**位置：** `HealthMi/Sync/SyncEngine.swift:88-118, 228-253`
+
+普通类型只在 `fetchAndMap` 返回的 `groups` 上执行回填删除。如果指定类型本次返回空集合，循环体不执行，HealthKit 中不再出现在小米响应里的旧记录仍会保留。运动回填也只对新响应里仍存在的 `draft` 删除和重写旧 workout，不会清理范围内已从云端消失的 workout。因此“全量重拉并重写”在空响应或已删除记录场景下实际只会重写当前仍返回的记录。
+
+**建议：**先确认 API 响应完整、分页结束且解析成功，再根据新旧 external UUID 集合差异做范围清理；协议错误或分页不完整时保留旧样本。
 
 #### S20｜P2：强制回填心率会删除 workout 关联心率样本
 
@@ -336,31 +276,49 @@ Swift App 映射为 `2=deep, 3=light, 4=REM, 5=awake`；Python MCP 工具映射�
 
 **建议：**保存前按 external UUID 对批次建索引并定义冲突策略（保留最新记录、合并或报协议错误）；对秒级 ID 增加稳定的事件标识或更高精度组成。为分页重复及同一秒冲突分别增加回归案例。
 
-#### S22｜P3：服务端分页游标未进行 JSON 字符串转义
+#### S17｜P2：睡眠总时长的区间边界与按日归属未定义
 
-**位置：** `HealthMi/MiFitness/MiAPIClient.swift:93-103, 213-223, 242-252`。
+**位置：** `HealthMi/Health/HealthKitReader.swift:27-44, 50-84, 126-145, 168-182`。
 
-`dataString` 手工插入 `key` 和 `nextKey` 到 JSON 字符串。`key` 来自代码中的固定名称，但 `nextKey` 来自服务端响应；如果游标含有引号、反斜杠或控制字符，下一页请求体会变成无效 JSON。仓库未包含小米分页游标格式的协议定义，因此该风险是否会由当前服务端真实触发仍需脱敏游标样例确认。
+`summary(days:)` 从当前时刻向前回退日历天数，并把查询返回的每个睡眠样本完整时长相加；当前 `predicateForSamples` 调用没有启用 `strictStartDate` / `strictEndDate`，因此与所选区间相交的样本也会返回，跨越起始边界的样本会把区间外时长一并计入总量。趋势查询则把每段睡眠的完整分钟数归到 `sample.startDate` 所在日，没有按午夜切分；例如跨午夜的一段睡眠会全部落在开始日。是否应按“入睡夜晚”归属需要产品定义，但当前数据不能解释为严格的日历日睡眠分钟数。查询还会直接相加所有来源的睡眠样本，没有检查来源或重叠区间；若不同来源记录了重叠睡眠，也会重复累计。
 
-**建议：**用 `JSONSerialization` 或 `JSONEncoder` 编码请求对象，避免对服务端游标做字符串插值；保留当前已验证的字段和值语义并用含特殊字符的游标夹具验证。
+**影响：**最近 N 天摘要可能包含边界之外的睡眠；趋势图可能把整晚显示在入睡日；多来源重叠记录可能高估睡眠时长。实际误差取决于设备样本的时间范围和来源。
 
-#### S23｜P3：CSV 导出 `days` 参数没有参与筛选
+**建议：**明确采用日历日切分还是睡眠夜归属；对查询区间边界裁剪样本时长，并按选定策略处理跨午夜区间。多来源样本需要有明确的来源优先级或重叠去重规则。Apple 将 `strictStartDate` / `strictEndDate` 定义为要求样本起止时间落在目标区间内的选项；当前调用未传这些严格选项，因此应按可能跨界返回的样本处理。
 
-**位置：** `HealthMi/App/DataExporter.swift:7-28`；当前调用 `HealthMi/App/DashboardView.swift` 的 CSV 导出按钮。
+#### S14｜P2：未识别的睡眠阶段被默认伪装成浅睡
 
-`exportCSV(days:trends:stressRecords:)` 接收 `days`，但函数体没有读取它；实际行数完全由 `trends` 决定。当前界面传入的趋势本身是最近 7 天，所以现有按钮路径看起来一致；若后续调用方传入 30 天或更长的 `trends`，参数名称会让调用者误以为函数会限制为所选天数。
+**位置：** `HealthMi/MiFitness/MiParser.swift:113-123`
 
-**建议：**若筛选由调用方负责，删除未使用的 `days` 参数并在调用点明确传入已筛选数据；若函数负责范围，则用 `days` 对趋势和压力记录统一裁剪。
+当前只明确映射 state `2` 至 `5`，其余值（包括缺失或未来新增编码）全部返回 `.light`，再由 `TypeMapper` 写成 HealthKit `asleepCore`。这会把未知或异常记录伪造成有效浅睡样本，影响睡眠分期与统计。
 
-#### S24｜P2：网页登录用子串匹配信任 Cookie 域名
+**建议：**让解析结果能表达未知或无效状态；未知分期应跳过或保留原始编码并记录诊断，避免默认映射为浅睡。用已确认的小米编码样例覆盖所有支持的状态值。
 
-**位置：** `HealthMi/MiFitness/MiWebLogin.swift:20-31`；WebView 导航见 `HealthMi/App/MiWebLoginView.swift:124-125, 173-181, 209-216`；相关测试 `HealthMiTests/MiWebLoginTests.swift:45-70`。
+#### S16｜P2：Swift App 与 Python 工具的睡眠阶段编码不一致
 
-Cookie 提取条件是 `$0.domain.contains("account.xiaomi.com")`，而不是检查规范化后的域名是否为 `account.xiaomi.com` 或其合法子域。WebView 控制器把 `target=_blank` 也加载到同一个 WebView，未限制目标主机；如果浏览到 `account.xiaomi.com.attacker.example` 一类域名，该域也满足子串检查。该页面可设置同名 Cookie；`getAllCookies()` 会把多域名 Cookie 一并交给提取器，而代码会按返回顺序选取同名项。当前测试仅排除了完全不相关的 `example.com`，没有覆盖域名后缀伪装和同名 Cookie 冲突。
+**位置：** `HealthMi/MiFitness/MiParser.swift:113-123`；`tools/mi-fitness-mcp-cn/src/mi_fitness_mcp/adapters/mi_fitness_cloud.py:418-429`；Swift 测试见 `HealthMiTests/MiParserTests.swift:38-64`。
 
-**影响：**登录流程可能捕获并提交非小米账号域的伪造 `userId` / `passToken`，造成登录失败或凭据来源混淆。此问题需要用户被引导到或主动打开伪装域名才会触发；本轮没有验证实际 WebView 导航路径。
+Swift App 映射为 `2=deep, 3=light, 4=REM, 5=awake`；Python MCP 工具映射为 `1=deep, 2/3=light, 4=awake, 5=REM`。Swift 源码注释称其映射已按实际数据修正，Python 映射为旧版本，但仓库没有保留可复核的原始响应夹具或协议文档来独立判定哪套映射符合小米当前协议。Swift 测试只覆盖 `2/4/5`，没有覆盖 `3`、未知编码或与 Python 共享的样例；Python 测试也未覆盖该映射。
 
-**建议：**规范化 Cookie domain（去掉前导点、转小写），按域名标签边界做精确匹配；若仅需要登录主机，就只接受 `account.xiaomi.com`。同时限制 WebView 的外部导航，并增加 `account.xiaomi.com.attacker.example`、`notaccount.xiaomi.com` 及重复同名 Cookie 的测试。
+**影响：**两个工具面对相同睡眠记录会输出不同阶段；若旧 Python 映射仍被下游使用，REM、深睡和清醒时长会错分。该差异不影响 HealthKit 授权弹窗，也不能仅凭代码断言 Swift 当前映射错误。
+
+**建议：**保存脱敏的真实云端睡眠记录作为黄金夹具，明确每个 state 的协议语义，并让 Swift 与 Python 共用同一组预期映射。未知值应保留为未知或跳过，不能默认伪装成浅睡（参见 S14）。
+
+#### S13｜P2：全局同步被步数写入权限统一拦截
+
+**位置：** `HealthMi/App/AppModel.swift:124-138, 184-194`
+
+`healthKitAuthorized` 只表示 `stepCount` 的 HealthKit 写入状态。`syncAll` 在同步任何数据类型前都要求它为 `true`，否则直接返回。用户即使只启用其它可写类型，也会因步数被拒绝而被全局阻止；压力数据本身存 Core Data、不写 HealthKit，却同样无法同步。
+
+**建议：**按启用的数据类型分别处理 HealthKit 写入失败；HealthKit 之外的数据（至少压力）不应依赖步数授权。界面状态应拆分为授权请求状态、步数写入状态和各类型的实际写入结果，避免一个状态代表所有权限。
+
+#### S5｜P2：API 同步过程中 token 失效时连接状态可能仍显示正常
+
+**位置：** `HealthMi/MiFitness/MiAPIClient.swift:41-45`、`HealthMi/App/AppModel.swift:296-313, 324-328`
+
+API 客户端识别 `code=70016`，但 `AppModel.isAuthError` 只识别登录阶段的 `MiLoginError.loginRejected`。已经连接后在数据接口遇到 `MiAPIError.api(code:70016)`，会记一类数据同步失败，却不一定设置 `authNeedsRefresh` 或更新 `connected` 状态。
+
+**建议：**同步错误统一映射登录/令牌失效状态，在界面明确要求刷新凭据；避免重复重试永久失效的 token。
 
 #### S25｜P2：退出或更换小米账号不会取消正在运行的同步
 
@@ -380,15 +338,25 @@ Cookie 提取条件是 `$0.domain.contains("account.xiaomi.com")`，而不是检
 
 **建议：**在同步开始时一次性捕获区域、时区、回填天数、类型集合及账号会话，并将快照传入该轮所有请求；或者同步期间禁用相关设置控件。日志记录实际使用的配置，便于复现跨区域和部分回填问题。
 
-#### S27｜P3：单类同步部分写入失败时，错误日志固定记录零条
+#### S6｜P2：取消请求时重试与分页等待可能继续运行
 
-**位置：** `HealthMi/App/AppModel.swift:236-260`；分组保存见 `HealthMi/Sync/SyncEngine.swift:85-120, 228-253`。
+**位置：** `HealthMi/MiFitness/MiAPIClient.swift:105-127, 222, 251`；`HealthMi/Sync/BackgroundSync.swift:23-37`；`HealthMi/App/SyncIntent.swift:26-31`
 
-一个同步类型可能包含多个 HealthKit sample group，或逐条保存多个 workout。前面组/运动已成功写入后，后续操作抛错会进入 `AppModel` 的统一 catch；该分支不读取已经完成的工作，固定以 `fetched: 0, added: 0` 写失败日志。压力路径也可能先完成 `replaceRange`，之后保存游标失败，再写一条零计数失败日志。
+退避和分页间隔使用 `try? Task.sleep`，取消错误会被忽略；网络错误又被统一包装为可重试错误。快捷指令超时或系统后台任务过期时，任务可能继续进入下一轮请求，而不是及时结束。
 
-**影响：**HealthKit 或 Core Data 中可能已有部分新数据，但同步历史显示“拉取 0、新增 0”，使用户无法区分纯失败和部分成功；重试虽通常可由 external UUID 或范围替换收敛，但日志不能反映真实结果。
+**建议：**对 `CancellationError` 立即向上传播；分页循环前检查取消状态；后台任务确保完成回调仅由一个路径负责。
 
-**建议：**让同步结果/错误携带已获取和已提交计数，并显式标记部分成功；或把每类数据的写入阶段和日志状态设计成可恢复的步骤。覆盖“前一组成功、后一组失败”和“数据已保存、游标保存失败”。
+#### S18｜P2：快捷指令/后台任务取消与完成路径没有统一收敛
+
+**位置：** `HealthMi/App/SyncIntent.swift:20-34`；`HealthMi/Sync/BackgroundSync.swift:25-37`；`HealthMi/App/AppModel.swift:209-212, 270-278`；重试等待见 `HealthMi/MiFitness/MiAPIClient.swift:105-127, 218-251`。
+
+快捷指令创建了独立 `Task` 执行 `syncAll`，只由 55 秒 watchdog 主动取消；代码没有把 `perform()` 调用方的取消显式传递给该任务。`syncAll` 检查到取消后只 `break` 数据类型循环，随后仍更新状态、刷新 HealthKit 摘要并可能发送通知。API 重试和分页等待用 `try? Task.sleep`，取消产生的错误被吞掉：重试等待取消后仍可能尝试下一次请求，分页等待取消后会直接进入下一页。
+
+后台刷新有两个完成入口：`expirationHandler` 异步安排取消并立即调用 `setTaskCompleted(false)`；同步任务正常返回后也调用 `setTaskCompleted(success:)`。两条路径没有共享的一次性完成门闩；若过期与同步结束并发，存在重复报告完成的竞态。取消分支在 `guard !Task.isCancelled else { return }` 处提前返回，也不会清空静态 `syncTask` 引用。
+
+**影响：**系统已过期或快捷指令调用方已取消后，仍可能继续做重试等待和 HealthKit 读取；后台任务可能出现重复完成报告或保留过期任务引用。此问题不解释授权表单/来源列表缺失。
+
+**建议：**让取消沿结构化任务传播；重试等待遇到取消立即抛出，循环每个请求边界都检查取消；`syncAll` 取消后尽早返回，不再运行摘要查询；后台任务用单一完成状态协调过期与正常完成，并通过 `defer` 清除任务引用。用“取消与同步完成同时发生”的测试验证完成回调只走一次。
 
 #### S28｜P2：回填“最近 N 天”实际覆盖 N+1 个日历日期
 
@@ -400,45 +368,7 @@ Cookie 提取条件是 `$0.domain.contains("account.xiaomi.com")`，而不是检
 
 **建议：**明确采用“最近 N 个日历日（含今天）”还是“今天加前 N 天”；前者通常从今天的日历起点向前减 `N-1` 天。测试应固定时区与日期，断言查询起止日期及覆盖日期数，而非仅断言时间差。
 
-#### S29｜P2：缺失的记录时间被转换成 1970 年样本
-
-**位置：** `HealthMi/MiFitness/MiParser.swift:31-42, 130-145, 231-239, 293-301`。
-
-`recordDate(of:)` 和 `calendarDay(of:)` 都用 `item.time ?? 0` 填补缺失时间；静息心率解析也使用 `payload.date_time ?? item.time ?? 0`。因此 API 返回记录缺少时间字段时，心率、体重或日活动的其它有效数值不会被跳过，而可能被解析成 Unix epoch 附近的时间。`TypeMapper` 对心率/体重样本没有时间合理性校验，日活动则会按区域把 1970-01-01 映射为整日样本。若错误时间来自 `MiJSON.int` 对非法数字文本的兜底 0，也会出现相同结果（另见 S2）。
-
-**影响：**不完整 API 响应可能污染 Apple 健康的历史时间线；HealthKit 写入成功后，正常 external UUID 去重还会让错误时间样本长期保留。
-
-**建议：**让时间解析返回可失败结果；缺少必要时间字段的记录应跳过并计入解析告警，或使该页失败且不推进同步游标。增加缺少 `item.time`、非法时间文本、合法 Unix epoch 附近数据的边界测试。
-
-### C. 仓库内 Python MCP/CLI 参考工具
-
-此目录是独立的 Python 小米运动健康同步/MCP 工具，不是 iOS App HealthKit 弹窗的直接调用链；以下问题不会解释 iPhone 上权限列表没有 HealthMi。
-
-#### P1｜按用户隔离不完整，切换账号可能覆盖记录和共享游标
-
-**位置：** `tools/mi-fitness-mcp-cn/src/mi_fitness_mcp/storage/__init__.py:224-229, 294-307, 422-435, 462-474, 507-518`；适配器 ID 生成见 `adapters/mi_fitness_cloud.py:498-504, 700-709`
-
-`sync_state` 的唯一键只有 `data_type`，没有 `user_id`；多类记录以日期/秒级时间生成全局 `id`，部分 upsert 在 `ON CONFLICT(id)` 时更新指标但不更新 `user_id`。若一个 SQLite 库先后服务不同小米账号，游标会共享，碰撞记录也可能由一个账号的值覆盖而仍保留另一个账号的 user_id。
-
-**建议：**为同步游标加入用户作用域，并让记录主键/唯一约束及 upsert 策略一致地按用户隔离。
-
-#### P2｜指标序列只查每日活动，`weight_kg` 等身体指标会返回空
-
-**位置：** `tools/mi-fitness-mcp-cn/src/mi_fitness_mcp/services/query_service.py:54-82`
-
-`get_metric_series()` 始终从 `get_daily_summaries()` 取数据；每日摘要不含体重，因此调用指标 `weight_kg` 得不到身体测量记录。
-
-**建议：**按指标路由到对应存储查询；为每日活动、身体测量、心率、血氧等分别定义指标类型。
-
-#### P2｜周/月聚合的未知模式默认按 sum
-
-**位置：** `tools/mi-fitness-mcp-cn/src/mi_fitness_mcp/services/query_service.py:104-115, 137-148`
-
-`aggregation == "latest"` 未单独处理，会落入 `else: sum(values)`，导致请求最新值却得到总和；拼错聚合名称也不会报错。
-
-**建议：**显式支持 `latest`，不支持的聚合值应校验报错。
-
-#### P2｜CLI/MCP 诊断会暴露凭据标识和原始健康记录
+#### PY4｜P2：CLI/MCP 诊断会暴露凭据标识和原始健康记录
 
 **位置：** `tools/mi-fitness-mcp-cn/src/mi_fitness_mcp/main.py:32, 70, 154-156`；`server.py:476-489`；探测脚本 `probe_mifitness.py:34-40, 243, 260-264`、`probe_apnea.py:7-9, 88-101, 143-160`
 
@@ -446,41 +376,21 @@ Cookie 提取条件是 `$0.domain.contains("account.xiaomi.com")`，而不是检
 
 **建议：**避免把 passToken 放在命令行参数中；默认脱敏 user ID；探测程序输出样例时删去账号、精确时间和健康数据，或明确提供脱敏模式。
 
-#### P3｜MCP SQLite 连接缺少显式关闭接口
+#### PY2｜P2：指标序列只查每日活动，`weight_kg` 等身体指标会返回空
 
-**位置：** `tools/mi-fitness-mcp-cn/src/mi_fitness_mcp/storage/__init__.py:31-42, 269-283`；`tools/mi-fitness-mcp-cn/src/mi_fitness_mcp/server.py:649-662`
+**位置：** `tools/mi-fitness-mcp-cn/src/mi_fitness_mcp/services/query_service.py:54-82`
 
-`Database` 延迟创建并将 SQLite connection 长期缓存在实例字段中，但没有 `close()` 方法；`with self._get_connection()` 仅管理事务，不关闭该缓存连接。MCP server 退出时 `finally` 关闭 adapter，却没有关闭数据库连接。通常单进程 CLI 退出后由进程回收资源，所以暂未发现会影响正常短命令的故障；若数据库对象在嵌入式/测试进程中反复创建或服务关闭后继续驻留，连接与文件锁会持续占用到对象/进程结束。
+`get_metric_series()` 始终从 `get_daily_summaries()` 取数据；每日摘要不含体重，因此调用指标 `weight_kg` 得不到身体测量记录。
 
-**建议：**为 `Database` 增加显式生命周期关闭接口，并在 server/CLI teardown 中调用；测试也应关闭数据库对象，避免测试进程残留连接。
+**建议：**按指标路由到对应存储查询；为每日活动、身体测量、心率、血氧等分别定义指标类型。
 
-#### P3｜部分同步失败后仍打印“同步完成”
+#### PY3｜P2：周/月聚合的未知模式默认按 sum
 
-**位置：** `tools/mi-fitness-mcp-cn/src/mi_fitness_mcp/main.py:125-140`
+**位置：** `tools/mi-fitness-mcp-cn/src/mi_fitness_mcp/services/query_service.py:104-115, 137-148`
 
-逐数据类型失败会打印错误，但流程随后总会打印“同步完成！”，没有整体失败状态或非零退出码。
+`aggregation == "latest"` 未单独处理，会落入 `else: sum(values)`，导致请求最新值却得到总和；拼错聚合名称也不会报错。
 
-**建议：**汇总成功/失败数据类型；存在部分失败时明确标示部分完成，并返回可供自动化检测的失败状态。
-
-#### P3｜本地健康数据 SQLite 未见数据库加密配置
-
-**位置：** `tools/mi-fitness-mcp-cn/src/mi_fitness_mcp/storage/__init__.py:270-280`
-
-工具把健康数据存入普通 SQLite 连接，源码中未见 SQLCipher 或额外的数据库加密层。若数据库落在多人可读设备或被备份同步的位置，应评估静态数据保护和文件权限。
-
-### D. 既有问题记录的时效性
-
-仓库中未跟踪的 `项目分析-优先关注问题.md` 标记分析基线为 `5930b70`，早于当前源码审查基线 `82fef0f`。其中“压力部分回填会清空全部历史”“压力保存失败吞错”等条目在当前代码已处理：`SyncEngine.syncStress` 返回实际查询范围，`StressStore.replaceRange` 只替换该范围，Core Data 保存错误会向上抛出。旧文档适合作为历史记录，不能直接当作当前结论。
-
-当前工作区有此未跟踪文件，本次没有修改、暂存或提交它。
-
-### E. iOS 17 SwiftData 到 Core Data 迁移核对
-
-从历史提交 `565cd71^` 读取到的 iOS 17 版本使用 `Schema([SyncState.self, StressRecord.self, SyncLogEntry.self])` 与默认 `ModelConfiguration(schema:)` 打开 SwiftData；当前 `LegacySwiftDataImporter.importIfNeeded` 使用相同模型集合和同一默认配置。模型字段、SwiftData unique 属性也与当前迁移器读取的 v1 schema 对应。因此静态代码未发现“新旧版本使用了不同默认 SwiftData store 配置”的明显错误。
-
-当前单元测试通过内存 SwiftData 容器调用 `importRecords` 验证记录字段、幂等标记和旧库保留，但没有用**历史版本实际落盘的默认 SwiftData store**执行启动升级测试。这个仍是验证缺口，不能仅凭内存导入测试断言真实升级路径已在 iOS 17 用户数据上成功。
-
-### F. GitHub Actions 与测试覆盖
+**建议：**显式支持 `latest`，不支持的聚合值应校验报错。
 
 #### CI1｜P2：模拟器诊断失败后工作流仍可能判为成功
 
@@ -500,8 +410,6 @@ IPA 工作流只对 generic iOS 目标执行 `xcodebuild build`；模拟器工�
 
 **测试覆盖观察：**现有 `SyncEngineTests` 只验证窗口计算，且没有发现 S28 的 N+1 日问题；没有测试 API 分页字段校验、缺失记录时间、HealthKit 写入/回填或账号切换竞态。`TypeMapperTests` 的日活动期望值与 `MiParserTests` 一起断言 `activeKcal == 210`，会让 S15 的总卡路里映射问题通过；睡眠分期测试没有覆盖状态 3 和未知状态；`MiCryptoTests.testDataStringOrder` 只用普通游标 `abc`，没有覆盖 S22 的 JSON 转义边界。
 
-### G. README 与实现的差异
-
 #### DOC1｜P2：README 将后台刷新描述成每小时执行
 
 **位置：** `README.md:12, 116`；调度代码 `HealthMi/Sync/BackgroundSync.swift:39-47`；Apple 的 [`BGTaskRequest.earliestBeginDate`](https://developer.apple.com/documentation/backgroundtasks/bgtaskrequest/earliestbegindate) 文档。
@@ -509,6 +417,80 @@ IPA 工作流只对 generic iOS 目标执行 `xcodebuild build`；模拟器工�
 代码把 `earliestBeginDate` 设为一小时后，然后提交 `BGAppRefreshTaskRequest`。该值表示系统不应在此时间前启动任务，并不构成每小时准时运行的承诺；任务运行时间由 iOS 后台调度器决定。README 的“每小时周期刷新”容易被理解为固定周期，特别是首次安装或用户划掉 App 后更容易误判为同步失效。
 
 **建议：**将文案改为“系统可能在一小时后或更晚安排后台刷新，时间不保证；需要确定性同步时使用 App 内手动同步或快捷指令”。
+
+### P3｜较低频边界、记录与文档问题
+
+#### S8｜P3：HealthKit 分页遇到同一开始时间超过页长时可能不前进
+
+**位置：** `HealthMi/Health/HealthWriter.swift:17-39, 130-157`
+
+分页锚点仅取最后一个样本的 `startDate`，下一页查询包含该边界（`>= anchor`）。若超过 1000 条样本共享相同开始时间，锚点可能不变，查询重复相同一页。
+
+**建议：**使用可严格推进的分页游标/查询机制；至少为大量同时间戳样本增加终止保护与回归测试。
+
+#### S22｜P3：服务端分页游标未进行 JSON 字符串转义
+
+**位置：** `HealthMi/MiFitness/MiAPIClient.swift:93-103, 213-223, 242-252`。
+
+`dataString` 手工插入 `key` 和 `nextKey` 到 JSON 字符串。`key` 来自代码中的固定名称，但 `nextKey` 来自服务端响应；如果游标含有引号、反斜杠或控制字符，下一页请求体会变成无效 JSON。仓库未包含小米分页游标格式的协议定义，因此该风险是否会由当前服务端真实触发仍需脱敏游标样例确认。
+
+**建议：**用 `JSONSerialization` 或 `JSONEncoder` 编码请求对象，避免对服务端游标做字符串插值；保留当前已验证的字段和值语义并用含特殊字符的游标夹具验证。
+
+#### PY7｜P3：本地健康数据 SQLite 未见数据库加密配置
+
+**位置：** `tools/mi-fitness-mcp-cn/src/mi_fitness_mcp/storage/__init__.py:270-280`
+
+工具把健康数据存入普通 SQLite 连接，源码中未见 SQLCipher 或额外的数据库加密层。若数据库落在多人可读设备或被备份同步的位置，应评估静态数据保护和文件权限。
+
+#### S9｜P3：凭据先写入 Keychain、后验证登录
+
+**位置：** `HealthMi/App/AppModel.swift:95-105`
+
+`saveCredentials` 先保存 userId/passToken，再连接小米 API。若验证失败，凭据仍会留在 Keychain；下次启动 `bootstrap()` 只要读到凭据就会将 `isConfigured` 设为 true。
+
+**建议：**先验证临时凭据，再保存成功的会话；或登录失败后回滚新写入值。
+
+#### S10｜P3：用户关闭所有同步类型后重启会恢复全选
+
+**位置：** `HealthMi/App/AppModel.swift:48-50, 71-92`
+
+`loadEnabledTypes()` 只有在持久化集合非空时才覆盖默认值。用户有意清空全部类别时，空数组会被解释为“没有设置过”，重启后恢复全部类型。
+
+**建议：**区分“键不存在”与“键存在但数组为空”。
+
+#### S23｜P3：CSV 导出 `days` 参数没有参与筛选
+
+**位置：** `HealthMi/App/DataExporter.swift:7-28`；当前调用 `HealthMi/App/DashboardView.swift` 的 CSV 导出按钮。
+
+`exportCSV(days:trends:stressRecords:)` 接收 `days`，但函数体没有读取它；实际行数完全由 `trends` 决定。当前界面传入的趋势本身是最近 7 天，所以现有按钮路径看起来一致；若后续调用方传入 30 天或更长的 `trends`，参数名称会让调用者误以为函数会限制为所选天数。
+
+**建议：**若筛选由调用方负责，删除未使用的 `days` 参数并在调用点明确传入已筛选数据；若函数负责范围，则用 `days` 对趋势和压力记录统一裁剪。
+
+#### S27｜P3：单类同步部分写入失败时，错误日志固定记录零条
+
+**位置：** `HealthMi/App/AppModel.swift:236-260`；分组保存见 `HealthMi/Sync/SyncEngine.swift:85-120, 228-253`。
+
+一个同步类型可能包含多个 HealthKit sample group，或逐条保存多个 workout。前面组/运动已成功写入后，后续操作抛错会进入 `AppModel` 的统一 catch；该分支不读取已经完成的工作，固定以 `fetched: 0, added: 0` 写失败日志。压力路径也可能先完成 `replaceRange`，之后保存游标失败，再写一条零计数失败日志。
+
+**影响：**HealthKit 或 Core Data 中可能已有部分新数据，但同步历史显示“拉取 0、新增 0”，使用户无法区分纯失败和部分成功；重试虽通常可由 external UUID 或范围替换收敛，但日志不能反映真实结果。
+
+**建议：**让同步结果/错误携带已获取和已提交计数，并显式标记部分成功；或把每类数据的写入阶段和日志状态设计成可恢复的步骤。覆盖“前一组成功、后一组失败”和“数据已保存、游标保存失败”。
+
+#### PY6｜P3：部分同步失败后仍打印“同步完成”
+
+**位置：** `tools/mi-fitness-mcp-cn/src/mi_fitness_mcp/main.py:125-140`
+
+逐数据类型失败会打印错误，但流程随后总会打印“同步完成！”，没有整体失败状态或非零退出码。
+
+**建议：**汇总成功/失败数据类型；存在部分失败时明确标示部分完成，并返回可供自动化检测的失败状态。
+
+#### PY5｜P3：MCP SQLite 连接缺少显式关闭接口
+
+**位置：** `tools/mi-fitness-mcp-cn/src/mi_fitness_mcp/storage/__init__.py:31-42, 269-283`；`tools/mi-fitness-mcp-cn/src/mi_fitness_mcp/server.py:649-662`
+
+`Database` 延迟创建并将 SQLite connection 长期缓存在实例字段中，但没有 `close()` 方法；`with self._get_connection()` 仅管理事务，不关闭该缓存连接。MCP server 退出时 `finally` 关闭 adapter，却没有关闭数据库连接。通常单进程 CLI 退出后由进程回收资源，所以暂未发现会影响正常短命令的故障；若数据库对象在嵌入式/测试进程中反复创建或服务关闭后继续驻留，连接与文件锁会持续占用到对象/进程结束。
+
+**建议：**为 `Database` 增加显式生命周期关闭接口，并在 server/CLI teardown 中调用；测试也应关闭数据库对象，避免测试进程残留连接。
 
 #### DOC2｜P3：README 声称存在的 `MiRegionTests` 不在测试 target 中
 
@@ -518,9 +500,34 @@ README 的测试说明称 `MiRegionTests` 验证区域配置，但仓库当前�
 
 **建议：**补上对应测试并将其纳入 CI，或移除 README 中对该测试的描述，避免读者误以为区域配置已被自动验证。
 
+### 未定级的审查备注
+
+以下内容用于记录历史问题状态和尚未完成的验证，不是本轮确认的独立代码缺陷，因此不纳入 P1–P3 排序。
+
+#### D. 既有问题记录的时效性
+
+仓库中未跟踪的 `项目分析-优先关注问题.md` 标记分析基线为 `5930b70`，早于当前源码审查基线 `82fef0f`。其中“压力部分回填会清空全部历史”“压力保存失败吞错”等条目在当前代码已处理：`SyncEngine.syncStress` 返回实际查询范围，`StressStore.replaceRange` 只替换该范围，Core Data 保存错误会向上抛出。旧文档适合作为历史记录，不能直接当作当前结论。
+
+当前工作区有此未跟踪文件，本次没有修改、暂存或提交它。
+
+#### E. iOS 17 SwiftData 到 Core Data 迁移核对
+
+从历史提交 `565cd71^` 读取到的 iOS 17 版本使用 `Schema([SyncState.self, StressRecord.self, SyncLogEntry.self])` 与默认 `ModelConfiguration(schema:)` 打开 SwiftData；当前 `LegacySwiftDataImporter.importIfNeeded` 使用相同模型集合和同一默认配置。模型字段、SwiftData unique 属性也与当前迁移器读取的 v1 schema 对应。因此静态代码未发现“新旧版本使用了不同默认 SwiftData store 配置”的明显错误。
+
+当前单元测试通过内存 SwiftData 容器调用 `importRecords` 验证记录字段、幂等标记和旧库保留，但没有用**历史版本实际落盘的默认 SwiftData store**执行启动升级测试。这个仍是验证缺口，不能仅凭内存导入测试断言真实升级路径已在 iOS 17 用户数据上成功。
+
 ## 六、修复与验证建议
 
-### 第一优先级：确认最终安装包的 entitlement
+### 跨类别修复顺序
+
+1. **先解决当前 HealthKit 权限阻断：**核对手机实际安装包的 entitlement，并让授权请求错误可见（H1、H2）。
+2. **再保护同步数据完整性：**严格校验 API 响应，禁止不完整分页推进游标；修正数值解析、回填失败数据缺口、活动能量映射和当天累计值更新（S1、S2、S11、S15、S19）。
+3. **隔离独立 Python 工具的数据：**让同步游标和健康记录按用户隔离（PY1）。
+4. **完成 P2 项：**依照上方 P2 顺序处理数据准确性、账号与请求生命周期、HealthKit 诊断、CI 和 README 问题。
+5. **最后处理 P3 项：**依照上方 P3 顺序修复较低频边界、日志和文档问题。
+
+
+### HealthKit 处理步骤 1：确认最终安装包的 entitlement
 
 最省力的定责材料是**你实际交给 TrollStore 安装的那一个 IPA**，而不是 Xcode 工程文件或当前 unsigned IPA。也可以在有 macOS/Xcode 的环境对主程序执行：
 
@@ -542,14 +549,14 @@ plutil -p /tmp/healthmi-check/Payload/HealthMi.app/Info.plist
 
 若该 IPA entitlement 缺失，问题已锁定在构建/签名/安装包处理流程；若 entitlement 存在，再收集 iPhone 上的 HealthKit/HealthMi 统一日志和安装包来源，排查 bundle/签名状态或 TrollStore 对这份包的具体处理。
 
-### 第二优先级：修复打包方式
+### HealthKit 处理步骤 2：修复打包方式
 
 1. 选择本次分发目标：Apple 开发者签名包或 TrollStore 包。
 2. Apple 开发者签名包需确保 App ID、profile 和签名中的 HealthKit capability 配套。
 3. TrollStore 包需按其安装流程准备主可执行文件的 HealthKit entitlement，并在安装后再次检查实际 entitlement；不能假设它会从 XcodeGen 的 `.entitlements` 源文件推断权限。
 4. 修改 workflow 的 artifact 命名，明确区分 `unsigned` 与 `trollstore/healthkit-enabled`，避免把“可以安装”误解成“具备 HealthKit entitlement”。
 
-### 第三优先级：给授权请求加可见错误
+### HealthKit 处理步骤 3：给授权请求加可见错误
 
 1. 移除权限按钮及网页登录回调中的静默 `try?`。
 2. 将错误显示在 HealthKit 状态行附近，并写入诊断日志。
