@@ -12,7 +12,7 @@
 - **数据同步已在 iOS 16.3 真机确认成功。** 小米账号登录成功，数据可以从小米云端同步并写入 Apple 健康。
 - **Keychain `-34018` 已确认是旧 TrollStore entitlement 打包缺口，并已修复。** 新产物同时含 `com.apple.developer.healthkit = true` 与 `keychain-access-groups = [TROLLTROLL.*, com.apple.token]`，真机登录已通过。
 - **iOS 16 最低版本适配的主流程已通过真机验收。** Core Data 存储、HealthKit 写入和 TrollStore 安装路径没有阻止 iOS 16.3 运行。
-- **当前未解决的新问题是快捷指令动作“同步健康数据”显示“无法与帮助程序通信”。** 动作元数据已编译并能在快捷指令中找到；故障发生在动作执行阶段。当前最高概率是 `openAppWhenRun = false` 下在 App Intent 帮助进程中直接运行完整九类同步链路，导致执行超时、进程终止或未捕获异常；尚未取得该路径的设备系统日志，因此仍需最小化实验进一步定责。
+- **当前未解决的问题是快捷指令动作运行时返回“无法与帮助程序通信”，随后又出现“因为 App 意外退出”。** 最新 run `45522292408` 的 IPA 已静态确认包含 Intent metadata、HealthKit/TrollStore entitlements；路线二也已把 Intent 主体缩减为运行记录读写、轻量排队和可选 BGTask 提交，但用户仍反馈失败。由此不能再把“完整同步太慢”作为首要解释。项目没有 App Intents extension target，Intent 类型编译在主 App target；`openAppWhenRun = false` 本身不足以证明它运行在独立帮助进程。当前优先排查冷启动时的 BGTask handler 注册时机、排队后立即触发的后台同步、App Intents 宿主/旧动作缓存。没有设备 `.ips` 前，无法把进程退出归因到其中任何一个。详见第 9.18 节。
 
 ## 一、结论摘要
 
@@ -1395,3 +1395,66 @@ TrollStore IPA SHA-256 为 `885ACBCA4A3E90EB4468D4A5321C4248F5FA23350475412E8B85
 下一次真机验证要先删除旧版 HealthMi，并从新包重新添加两个快捷指令动作。如果仍崩溃，必须导出 `设置 → 隐私与安全性 → 分析与改进 → 分析数据` 中的 `HealthMi-*.ips` 和 `Shortcuts-*.ips`，否则无法区分 App Intent runtime、BGTask 注册和 TrollStore 伪签名环境造成的终止。
 
 独立解析最终 IPA 的 Mach-O 签名 SuperBlob 后，确认 entitlement blob 中包含上述 HealthKit、TrollStore application/team identifier、`get-task-allow` 与 Keychain access groups。主程序 SHA-256：`7d7171b55d8ed693355d8b3eccc073718d73e4495fb584e01d358d088494d300`。
+
+### 9.18 快捷指令仍崩溃：基于最新用户反馈的根因重排（2026-11-25）
+
+#### 新证据及其含义
+
+用户反馈：快捷指令运行后仍显示“无法与帮助程序通信”，再次运行又显示“无法进行操作，因为 App 意外退出”。本分析按用户已测试最新 TrollStore IPA `45522292408` 处理；若手机上安装的不是该 run 产物，先核对安装包。
+
+这条反馈使上一节“完整同步链路太长，导致 Intent 被系统回收”的解释明显降级：最新 `SyncHealthDataIntent.perform()` 不再启动 Core Data、Keychain、HealthKit、网络或完整同步，却仍出现问题。包级证据也已确认最新 IPA 有 `Metadata.appintents`、两个 Intent 名称和 entitlement；因此“未生成动作 metadata”与“HealthKit entitlement 缺失”不能解释这次快捷指令运行时现象。
+
+两个系统提示不一定代表两个独立故障。“无法通信”表示 Shortcuts 没有得到预期的 Intent 响应；“App 意外退出”说明某个承载该动作的 App 进程已退出，但系统提示本身没有给出退出进程名、异常类型或调用栈。它们可能是同一进程故障在两次调用中的不同表现。
+
+#### 纠正关于“帮助进程”的旧推断
+
+`project.yml` 只有 `HealthMi` application target，没有 App Intents extension target；`SyncHealthDataIntent` 和 `QueryLatestSyncStatusIntent` 都编译在主 App target。Apple 文档说明，系统可在 App 前台或后台运行 Intent；只有将 Intent 类型放到 App extension 时，才明确形成“与主 App 分离的 extension process”。所以仅凭 `openAppWhenRun = false`，不能断定本项目每次都在独立帮助进程执行，也不能据此断定它绕过了 `HealthMiApp` 的启动代码。[Apple：Creating your first app intent](https://developer.apple.com/documentation/appintents/creating-your-first-app-intent)；[Apple：`openAppWhenRun`](https://developer.apple.com/documentation/appintents/appintent/openappwhenrun-223b1)
+
+#### 当前代码实际调用顺序
+
+1. Intent 执行 `SyncRunStore.markStale()`，读取并可能改写 `UserDefaults` 中的 JSON 运行记录。
+2. 执行 `SyncRunStore.active()`。若有 `.queued` 或 `.running` 记录，直接构造对话并返回，不会创建新记录，也不会调用 BGTask 提交。
+3. 若没有活动记录，`SyncRunStore.create(trigger: .shortcut)` 先把 `.queued` 记录写入 `UserDefaults`。
+4. 然后 `BackgroundSync.scheduleFromIntentIfRegistered(immediate: true)`：只有本进程的注册标记为 true 时才调用 `BGTaskScheduler.submit`，并把 `earliestBeginDate` 设为约 1 秒后；否则不提交，仍准备返回“已排队”。
+5. Intent 生成 `IntentDialog` 并返回。同步任务在后台 handler 中另外执行。
+
+代码的外层 `do/catch` 会把普通 Swift 错误转成一段对话，而不是抛出；因此若 Shortcuts 确实显示通用通信错误或 App 进程意外退出，故障更像未被 Swift `catch` 捕获的系统终止/致命错误，或发生在调用 `perform()` 之前/返回之后。正常的 JSON、编码或 `BGTaskScheduler.submit` 抛错按现有代码应走 catch 分支；它们本身不应直接显示成进程崩溃。
+
+#### 根因候选排序
+
+| 顺序 | 候选原因 | 为什么仍成立 | 如何证伪或确认 |
+|---|---|---|---|
+| 1 | 冷启动阶段 BGTask handler 注册触发系统启动断言 | `HealthMiApp.init()` 直接调用 `BackgroundSync.register()`；项目没有显式 `UIApplicationDelegateAdaptor` 的 `application(_:didFinishLaunchingWithOptions:)` 注册点。Apple 要求传统 BGTask launch handler 在 `applicationDidFinishLaunching(_:)` 结束前全部注册，并说明同一标识符重复注册会杀死 App。SwiftUI `App.init()` 是否在所有 iOS 16.3 冷启动路径都满足这个时限，必须用崩溃报告核实，不能仅从源码判定必然违规。[Apple：BGTaskScheduler.register](https://developer.apple.com/documentation/backgroundtasks/bgtaskscheduler/register%28fortaskwithidentifier%3Ausing%3Alaunchhandler%3A%29) | `.ips` 的 `Termination Reason`、`Exception Type`、崩溃线程；搜索 `BGTaskScheduler`、`launch handler` 或重复注册相关信息。若确认，再把注册搬到明确的 UIKit launch callback 并重新构建。 |
+| 2 | 已提交的立即 BGTask 随后启动完整后台同步并崩溃 | `earliestBeginDate = now + 1s` 只是最早开始时间；系统可能很快启动后台任务。这个任务会初始化 Core Data、恢复凭据、访问 HealthKit 并执行同步。主 App 前台同步成功不能证明这条后台启动链路成功。 | 查询状态是否从 `.queued` 变为 `.running`；检查通知/同步历史是否有运行结果；崩溃报告的进程与时间是否落在快捷指令返回之后。 |
+| 3 | Intent 主体或 Shortcuts/App Intents runtime 与 iOS 16.3/TrollStore 组合不兼容 | 轻量 Intent 仍经过 `@MainActor` 调度、JSON 解码、`IntentDialog` 生成和系统结果序列化；构建与 metadata 检查不覆盖 iOS 16.3 的真机执行。 | 单独运行“查询最近同步状态”动作，并与同步动作对照；查看 `.ips` 的异常线程是否进入 `perform()`、Foundation/Swift runtime 或 AppIntents。 |
+| 4 | 快捷指令保存了旧动作定义 | 多次发布过同名 Intent；已有快捷指令可能仍引用旧定义。它不能解释确定的 App 崩溃，但重新添加可低成本排除。 | 在快捷指令中删除旧动作，从 HealthMi 动作列表重新加入；仍失败则不再把缓存当主因。 |
+
+#### 第二次运行为什么是关键线索
+
+如果第一次运行已完成 `SyncRunStore.create()`，但在排队记录写入后、Intent 响应返回前崩溃，那么第二次运行应在 `active()` 发现旧 `.queued` 记录，并绕过 `scheduleFromIntentIfRegistered()`。因此：
+
+- 若“查询最近同步状态”能正常显示“已排队”，说明至少一次 Intent 已成功写入运行记录，故障很可能在入队后调度/返回或随后 BGTask 路径；
+- 若查询动作也出现“无法通信/App 意外退出”，故障更偏向 App 启动、App Intents runtime 或共享的 `SyncRunStore` 访问路径；
+- 若状态显示 `.running`，表明 BGTask handler 已经领取记录，调查重点应转到后台同步执行和取消/终止日志；
+- 若状态没有任何记录，故障很可能发生在首次写入完成之前，或者系统实际执行的仍是旧版动作/旧 IPA。
+
+这是根据当前代码控制流得出的区分实验，不代表已经知道设备上哪一步崩溃。
+
+#### 最小设备诊断顺序
+
+1. 在手机确认安装的是 run `45522292408` 的 TrollStore IPA；下载文件 SHA-256 应为 `885ACBCA4A3E90EB4468D4A5321C4248F5FA23350475412E8B856857B034879B`。此包主程序最低系统版本为 iOS 16.0。
+2. 删除快捷指令里的旧“同步健康数据”动作，从 HealthMi 动作列表重新添加。
+3. 单独运行“查询最近同步状态”，记录它能否返回，以及状态是“暂无记录 / 已排队 / 同步中 / 失败”。随后再运行同步动作，观察状态是否变化。
+4. 从 iPhone 打开“设置 → 隐私与安全性 → 分析与改进 → 分析数据”，找到故障时间附近最新的 `HealthMi-*.ips`、`Shortcuts-*.ips` 或 `AppIntents-*.ips`（若存在），通过“共享 → 存储到文件”导出。保留报告头部的 `Process`、`Exception Type`、`Termination Reason`、`Triggered by Thread` 和崩溃线程堆栈；分享前可遮掉设备名、用户名等个人信息。
+5. 以 `.ips` 的实际 `Process` 和 `Termination Reason` 决定修复点。若没有 `.ips`，下一版先做只返回固定文本的最小 Intent 探针，逐步加回 UserDefaults 读写，再加 BGTask 提交；这比继续猜测或一次性重写完整同步更能定位崩点。
+
+#### 本轮结论
+
+目前最直接的代码风险是 SwiftUI `App.init()` 中的 `BGTaskScheduler.register()` 是否满足 iOS 16.3 冷启动注册时限；其次是快捷指令提交后马上启动的 BGTask 全量同步。可是现有证据不足以把“App 意外退出”定责给其中一项。我们尚未取得 iPhone `.ips`，也尚未确认状态查询动作的对照结果。本轮因此只更新诊断结论和最小复现步骤，不直接改动 Intent 行为；擅自改成打开 App 或删掉 BGTask 会改变用户已选定的静默路线，而且可能掩盖真正崩溃点。
+
+官方资料：
+
+- [Apple：Creating your first app intent](https://developer.apple.com/documentation/appintents/creating-your-first-app-intent)
+- [Apple：`openAppWhenRun`](https://developer.apple.com/documentation/appintents/appintent/openappwhenrun-223b1)
+- [Apple：`BGTaskScheduler.register`](https://developer.apple.com/documentation/backgroundtasks/bgtaskscheduler/register%28fortaskwithidentifier%3Ausing%3Alaunchhandler%3A%29)
+- [Apple：Background Tasks](https://developer.apple.com/documentation/backgroundtasks/)

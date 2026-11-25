@@ -238,3 +238,24 @@ IPA 已包含 `Metadata.appintents`，因此这不是动作注册失败。旧提
 若新包仍显示“无法与帮助程序通信”或“App 意外退出”，下一步必须收集 iPhone 的 `HealthMi-*.ips` 或 `Shortcuts-*.ips`，重点查看 `Exception Type`、`Termination Reason` 和崩溃线程；静态代码和 IPA 包级分析已经不足以判断下一层原因。
 
 独立解析最终 IPA 的 Mach-O 签名 SuperBlob 后，确认 entitlement blob 中包含上述 HealthKit、TrollStore application/team identifier、`get-task-allow` 与 Keychain access groups。主程序 SHA-256：`7d7171b55d8ed693355d8b3eccc073718d73e4495fb584e01d358d088494d300`。
+
+## 2026-11-25 快捷指令仍提示通信失败/应用退出：根因重排
+
+用户反馈最新快捷指令仍显示“无法与帮助程序通信”，再次执行出现“因为 App 意外退出”。路线二已经把同步 Intent 主体缩减为轻量运行记录和可选 BGTask 提交；因此此前“Intent 直接执行九类完整同步导致超时”的解释不能再作为主结论。
+
+代码检查发现：
+
+- Intent 在 `UserDefaults` 中写入 `.queued` 记录后才可能提交 `BGAppRefreshTaskRequest`；第二次运行如果能读取到 `.queued`，会走已有任务分支，不再提交新的 BGTask。
+- `HealthMiApp.init()` 直接注册 BGTask handler；项目没有显式 `UIApplicationDelegateAdaptor` 启动回调。Apple 当前的传统 `BGTaskScheduler.register(forTaskWithIdentifier:using:launchHandler:)` 文档要求在 `applicationDidFinishLaunching(_:)` 结束前完成注册，并说明重复注册同一标识符会导致系统杀 App。SwiftUI App 初始化是否在 iOS 16.3 所有相关启动路径满足时限，需要用设备 `.ips` 确认。
+- 项目没有独立 App Intents extension target。Apple 文档说明 Intent 可在 App 前台或后台运行；仅当 Intent 类型放在 app extension 时才明确是与主 App 分开的扩展进程。因此 `openAppWhenRun = false` 不能单独证明当前 Intent 一定运行在“帮助进程”。
+- 当前 Intent 的 `do/catch` 会将普通 Swift 错误转成对话。通用通信错误或“App 意外退出”更符合未捕获的系统级终止、Intent 入口/返回阶段异常，或 Intent 提交后异步 BGTask 的独立崩溃；但缺少 `.ips` 时无法判定具体代码位置。
+
+优先执行的设备区分实验：先单独运行“查询最近同步状态”，记录它能否执行及显示的运行状态；若显示“已排队”，说明首次触发至少写入过队列，调查重点转向排队后的 BGTask 提交、后台执行或结果返回；若查询动作本身也崩，则优先查冷启动、App Intents runtime 和共享状态读取。随后从 iPhone“设置 → 隐私与安全性 → 分析与改进 → 分析数据”导出故障时间附近的 `HealthMi-*.ips`、`Shortcuts-*.ips` 或 `AppIntents-*.ips`，重点看进程名、`Exception Type`、`Termination Reason` 和崩溃线程。
+
+这次只更新诊断，不改变静默执行路线。正式修复须按 `.ips` 定位；若报告不可获得，下一版应使用只返回固定文本的最小 Intent 探针，再逐步恢复 UserDefaults 与 BGTask 步骤。详细控制流、假设排序和验证步骤见 `HealthMi项目代码全面审查报告.md` 第 9.18 节。
+
+Apple 官方来源：
+
+- [Creating your first app intent](https://developer.apple.com/documentation/appintents/creating-your-first-app-intent)
+- [`openAppWhenRun`](https://developer.apple.com/documentation/appintents/appintent/openappwhenrun-223b1)
+- [`BGTaskScheduler.register`](https://developer.apple.com/documentation/backgroundtasks/bgtaskscheduler/register%28fortaskwithidentifier%3Ausing%3Alaunchhandler%3A%29)
