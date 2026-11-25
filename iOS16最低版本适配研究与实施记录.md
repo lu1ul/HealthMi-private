@@ -69,6 +69,33 @@
 - macOS 后续验收：执行 `xcodegen generate`、iOS 16 部署目标构建及现有 XCTest；在 iOS 17 旧版安装数据上验证三类 SwiftData 数据导入、重试幂等和旧库保留；在 iOS 16 模拟器或真机验证新安装核心功能。
 - 本地 commit：待补充。
 
+## 2026-11-25 快捷指令静默排队与详细错误反馈
+
+用户选择保留 `openAppWhenRun = false` 的静默路线，但将完整同步从 App Intent 请求中移出，改为“快速排队 + 后台持久化结果”。
+
+### 已实施内容
+
+- 新增 `HealthMi/Sync/SyncRunStore.swift`：运行记录使用共享 `UserDefaults` 保存最近 30 次运行，状态包括 `queued`、`running`、`succeeded`、`partialFailure`、`failed` 和 `cancelled`。
+- 错误保存为域、错误码和描述；已覆盖 `MiAPIError`、`MiLoginError`、Keychain `OSStatus`、HealthKit/系统 `NSError` 和应用前置错误。
+- `AppModel.syncAll` 增加可选运行 ID；每类数据成功、失败、取消及顶层前置错误都会写回同一运行记录。
+- `BackgroundSync` 领取排队运行；周期刷新没有排队记录时创建后台运行。过期回调和同步完成回调通过一次性门控，避免重复完成同一个 `BGTask`。
+- 网络重试和分页等待不再吞掉取消信号；BGTask 过期、URLSession 取消或 Task 取消都会明确标记为 `cancelled`，不会伪装成普通网络失败。
+- `SyncHealthDataIntent` 不再等待完整同步，只执行数据库、Keychain、HealthKit 可用性检查，创建排队记录并提交约一秒后的 `BGAppRefreshTaskRequest`。
+- 新增 `QueryLatestSyncStatusIntent`，快捷指令可以在稍后读取完整运行文本；后台完成后发送包含成功/失败类型和错误域/错误码的本地通知。
+- 同步历史页面增加最近一次后台运行摘要和完整运行 ID。
+
+### 行为限制
+
+- “已排队”只表示请求已写入本地并提交给系统调度，不代表后台同步已经开始；iOS 仍可能延迟启动 `BGAppRefreshTask`。
+- 后台产生的网络、登录、HealthKit 或单类数据错误不能回写到已经结束的原快捷指令动作，必须通过通知、同步历史或“查询最近同步状态”读取。
+- 当前工作区为 Windows，无法运行 Xcode、`xcodebuild` 或 XCTest；本阶段只完成静态检查和 `git diff --check`。需在 macOS/GitHub Actions 上做 iOS 16 构建验证。
+
+### 本地提交
+
+- `6e9818a docs: design shortcut quick queue and detailed status`
+- `0e524ed feat: persist detailed sync run results`
+- `75b07f6 feat: queue shortcut sync in background`
+
 ## 官方资料
 
 - [Apple SwiftData 文档](https://developer.apple.com/documentation/swiftdata)

@@ -48,6 +48,18 @@ enum BackgroundSync {
                 // 系统即将挂起进程，取消正在进行的同步
                 Task { @MainActor in
                     syncTask?.cancel()
+                    if let active = try? SyncRunStore.active(),
+                       active.status == .running {
+                        try? SyncRunStore.finish(
+                            id: active.id,
+                            status: .cancelled,
+                            topLevelError: SyncErrorDetails.make(
+                                domain: "HealthMi.BackgroundTasks",
+                                code: 1,
+                                message: "后台任务在完成前到达系统执行时限。"
+                            )
+                        )
+                    }
                 }
                 complete(false)
             }

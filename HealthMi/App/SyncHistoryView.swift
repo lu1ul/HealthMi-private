@@ -6,9 +6,24 @@ import SwiftUI
 struct SyncHistoryView: View {
     @FetchRequest(sortDescriptors: [NSSortDescriptor(key: "timestamp", ascending: false)])
     private var entries: FetchedResults<SyncLogEntryEntity>
+    @State private var latestRun: SyncRunRecord?
 
     var body: some View {
         List {
+            if let latestRun {
+                Section("最近一次后台运行") {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(latestRun.dialogText)
+                            .font(.caption)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Text("运行 ID：\(latestRun.id.uuidString)")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+
             if entries.isEmpty {
                 VStack(spacing: 8) {
                     Image(systemName: "clock")
@@ -25,6 +40,9 @@ struct SyncHistoryView: View {
             }
         }
         .navigationTitle("同步历史")
+        .onAppear {
+            latestRun = SyncRunStore.latest()
+        }
     }
 
     private func logRow(_ entry: SyncLogEntryEntity) -> some View {

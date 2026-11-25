@@ -1280,3 +1280,31 @@ func perform() async throws -> some IntentResult {
 2. **静默路线：保留 `openAppWhenRun = false`，把 Intent 改成轻量调度器。** `perform()` 只做凭据/配置检查、提交后台任务并快速返回；完整同步由 BGTask 或专用同步服务执行。优点是不打开 App；代价是快捷指令不能保证立即完成同步，系统也不保证后台任务马上运行。
 
 当前证据支持优先采用路线 1 作为第一修复版本；如果必须保持完全静默，再单独设计路线 2，并为“已排队”“已完成”“失败”提供明确状态，而不是让 App Intent 直接承担九类数据的长链路同步。
+
+### 9.15 路线二实施结果：快速排队与详细错误反馈（2026-11-25）
+
+用户确认保留静默执行，采用快速排队路线。实现结果如下：
+
+1. `SyncHealthDataIntent` 已从“直接执行九类完整同步”改为短事务：准备数据库、读取 Keychain、检查 HealthKit 可用性、检查已有活动运行、写入排队记录、提交 BGAppRefresh 请求，然后立即返回运行 ID。
+2. 新增 `QueryLatestSyncStatusIntent`，可读取最近一次运行的状态、触发方式、排队/开始时间、成功类型、失败类型及每类错误的域、码和描述。
+3. 新增 `SyncRunRecord` / `SyncRunStore`，保存最近 30 次运行；后台任务状态明确区分已排队、运行中、成功、部分失败、失败和取消，并把超过阈值仍未启动/完成的记录标记为 `HealthMi.SyncRun / code=408`。
+4. `AppModel.syncAll` 通过运行 ID记录每一类成功或失败；HealthKit 未授权、凭据无效、网络、HTTP、小米 API、Keychain、数据库和取消等错误不再只依赖瞬时 `lastError`。
+5. 后台完成后发送运行级本地通知。通知正文包括运行 ID、已完成类型和失败类型的完整错误文本；同步历史页面也显示最近一次运行摘要。
+6. `BackgroundSync` 对系统过期和同步完成使用一次性完成门控，避免同一 `BGTask` 被重复 `setTaskCompleted`。
+7. 网络退避和分页等待使用可抛出的任务 sleep，并识别 `URLError.cancelled`；取消不再触发后续重试，也不会被统计成普通网络失败。
+
+#### 用户可见行为
+
+- 快捷指令成功返回示例：`已排队（运行 ID：A1B2C3D4）`，并说明后台由系统稍后执行。
+- 已有任务时返回已有运行 ID和当前状态，不重复排队。
+- 排队前置检查失败时直接返回 `HealthMi.App / code=401`（无凭据）、`HealthMi.App / code=503`（HealthKit 不可用）或系统错误域/码，而不是通用“无法与帮助程序通信”。
+- 后台任务尚未启动时，查询结果保持“已排队”；任务被系统取消时显示“已取消”，不会伪装成成功。
+
+#### 仍需在 macOS/真机验证的项目
+
+- iOS 16.4 目标构建和 App Intents metadata 重新生成；
+- 真机快捷指令调用是否能够提交 `BGAppRefreshTaskRequest`；
+- 系统实际启动后台任务后的完整同步、通知显示和查询动作；
+- 网络/Keychain/HealthKit/小米 API 错误的域码是否与设备系统返回值一致。
+
+本阶段本地提交：`0e524ed`、`75b07f6`。未执行远程 push。

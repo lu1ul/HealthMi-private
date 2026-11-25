@@ -14,7 +14,7 @@
 - **每日详情页**：点击趋势图中任一天查看当日全部数据 + 压力记录
 - **同步历史日志**：持久化每次同步的结果（成功/失败/拉取数/新增数），自动裁剪 200 条
 - **数据导出**：一键导出最近 7 天每日数据为 CSV，通过系统分享面板发送
-- **快捷指令**：通过 Siri 或快捷指令触发同步（"同步 HealthMi 健康数据"）
+- **快捷指令**：通过 Siri 或快捷指令快速排队后台同步，并提供“查询最近同步状态”动作和详细错误通知
 - **压力数据展示**：从小米云端读取 stress key，存入 App 内 Core Data 展示（HealthKit 无对应类型）
 - **WebView 登录**：App 内 WKWebView 登录小米账号页面，自动捕获 Cookie
 
@@ -103,7 +103,7 @@ xcodebuild -project HealthMi.xcodeproj -scheme HealthMi \
 3. 在账号区域选择所在区域（默认中国大陆）；
 4. 点「立即增量同步」，选择首次回填天数（7/30/90/全部）；
 5. 之后在「健康」App 里即可看到小米设备的数据；
-6. 日常使用：打开 App 点同步，或依赖后台自动同步；
+6. 日常使用：打开 App 点同步，或运行快捷指令“同步 HealthMi 健康数据”。快捷指令会先返回“已排队”和运行 ID，完整同步由系统后台调度；之后可运行“查询最近同步状态”查看成功类型和具体错误；
 7. 在趋势区域查看 7 天图表，点击某天进入每日详情；
 8. 点击导航栏时钟图标查看同步历史日志；
 9. 数据导出区域可导出 CSV。
@@ -113,7 +113,7 @@ xcodebuild -project HealthMi.xcodeproj -scheme HealthMi \
 - **非官方接口**：本项目通过小米**非官方私有 API**（`account.xiaomi.com` / `hlth.io.mi.com`）读取数据，非小米官方产品，接口随时可能变更或失效；请自行评估使用风险，勿高频请求。`passToken` 等同账号凭证，请妥善保管，本项目仅在设备本地 Keychain 中保存，不会上传。
 - **passToken 有效期短**：过期后同步会报「登录被拒绝（code=70016）」，重新登录 account.xiaomi.com 复制新 token 更新即可。
 - **HealthKit 仅 iOS 可用**：原生 macOS App 无法写 HealthKit（需 Mac Catalyst + entitlement），因此本方案做成纯 iOS。
-- **后台同步**：已接入 `BGAppRefreshTask`（每小时周期刷新），模拟器不触发，需真机验证。用户从多任务划掉 App 后后台任务不触发，直到再次打开 App。
+- **后台同步**：已接入 `BGAppRefreshTask`（每小时周期刷新），模拟器不触发，需真机验证。快捷指令只提交后台请求，系统不保证立即执行；从多任务划掉 App 后，后台任务通常不会运行，直到再次打开 App 或系统重新调度。
 - **真机部署**：把 `project.yml` 里的 `PRODUCT_BUNDLE_IDENTIFIER` 换成你自己的，并在 Xcode 中配置开发团队（HealthKit entitlement 需要付费开发者账号）。
 - **运动记录**：用 `HKWorkoutBuilder` 构建；关联平均/最大心率样本（不与日总计重复计数）；不关联能量/距离样本，避免与每日活动总量重复计算。
 - **本地数据库**：Core Data 存储同步游标、压力记录和同步历史。升级到本版本的 iOS 17+ 用户会在首次启动时导入旧 SwiftData 数据；迁移完成前原 SwiftData 库保留，迁移失败时应用提供重试入口。

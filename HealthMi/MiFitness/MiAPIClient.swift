@@ -43,6 +43,18 @@ enum MiAPIError: LocalizedError {
         if case .api(let code, _) = self, code == 70016 { return true }
         return false
     }
+
+    /// Task 或 URLSession 被取消时不应进入指数退避重试。
+    var isCancellation: Bool {
+        switch self {
+        case .network(let underlying):
+            if underlying is CancellationError { return true }
+            let nsError = underlying as NSError
+            return nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled
+        default:
+            return false
+        }
+    }
 }
 
 /// 小米健康云数据客户端。Swift 移植自 `mi_fitness_cloud.MiFitnessCloudAdapter`。
@@ -111,15 +123,19 @@ actor MiAPIClient {
                 let baseDelay = UInt64(pow(2.0, Double(attempt - 1))) * 1_000_000_000
                 let jitter = UInt64.random(in: 0...200_000_000)
                 AppLog.apiClient.info("重试 \(attempt)/\(retries) path=\(path)")
-                try? await Task.sleep(nanoseconds: baseDelay + jitter)
+                try await Task.sleep(nanoseconds: baseDelay + jitter)
             }
             do {
                 return try await signedRequestOnce(path: path, dataString: dataString)
             } catch let error as MiAPIError {
-                if error.isAuthError || !error.isRetriable {
+                if error.isAuthError || error.isCancellation || !error.isRetriable {
                     throw error
                 }
                 lastError = error
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch where Task.isCancelled {
+                throw CancellationError()
             } catch {
                 lastError = error
             }
@@ -219,7 +235,7 @@ actor MiAPIClient {
             seen.insert(cursor!)
             nextKey = cursor
             // 分页请求间隔，避免高频请求触发小米限流
-            try? await Task.sleep(nanoseconds: pageDelayNs)
+            try await Task.sleep(nanoseconds: pageDelayNs)
         }
         return items
     }
@@ -248,7 +264,7 @@ actor MiAPIClient {
             seen.insert(cursor!)
             nextKey = cursor
             // 分页请求间隔，避免高频请求触发小米限流
-            try? await Task.sleep(nanoseconds: pageDelayNs)
+            try await Task.sleep(nanoseconds: pageDelayNs)
         }
         return items
     }

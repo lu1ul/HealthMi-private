@@ -310,6 +310,10 @@ final class AppModel: ObservableObject {
                     }
                 }
             } catch {
+                if Task.isCancelled || Self.isCancellation(error) {
+                    cancelled = true
+                    break
+                }
                 let message = "\(type.displayName)：\(Self.describeSyncError(error))"
                 lastError = message
                 messages.append("\(type.displayName) ❌")
@@ -323,8 +327,10 @@ final class AppModel: ObservableObject {
         }
         statusMessage = messages.joined(separator: "  ")
         refreshHealthKitStatus()
-        // 同步完成后刷新 App 内数据概览
-        await refreshSummary()
+        // 被系统取消时及时结束，避免额外 HealthKit 查询拖延后台过期处理。
+        if !cancelled {
+            await refreshSummary()
+        }
         let finalStatus: SyncRunStatus
         if cancelled {
             statusMessage = statusMessage.isEmpty ? "同步已取消" : "\(statusMessage)  已取消"
@@ -346,6 +352,20 @@ final class AppModel: ObservableObject {
         finishRun(runID, status: finalStatus, topLevelError: topLevelError)
         await notifyRunIfNeeded(runID: runID, fallbackError: lastError, isBackground: isBackground)
         return finalStatus
+    }
+
+    private static func isCancellation(_ error: Error) -> Bool {
+        if error is CancellationError { return true }
+        if let apiError = error as? MiAPIError {
+            return apiError.isCancellation
+        }
+        if let loginError = error as? MiLoginError,
+           case .network(let underlying) = loginError {
+            let nsError = underlying as NSError
+            return nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled
+        }
+        let nsError = error as NSError
+        return nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled
     }
 
     private func markRunRunning(_ runID: UUID?) {

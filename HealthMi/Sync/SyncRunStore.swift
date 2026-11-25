@@ -70,7 +70,9 @@ struct SyncErrorDetails: Codable, Hashable, Sendable {
                     code: nsError.code,
                     message: error.localizedDescription
                 )
-            case .notConnected, .paginationLimit, .cursorLoop, .invalidResponse:
+            case .notConnected, .paginationLimit, .cursorLoop:
+                return Self(domain: "MiAPI", code: 0, message: error.localizedDescription)
+            case .invalidResponse:
                 return Self(domain: "MiAPI", code: 0, message: error.localizedDescription)
             }
 
@@ -345,6 +347,7 @@ enum SyncRunStore {
         now: Date = Date()
     ) throws {
         try update(id: id, now: now) { record in
+            guard record.status == .queued || record.status == .running else { return }
             record.status = status
             record.finishedAt = now
             record.topLevelError = topLevelError

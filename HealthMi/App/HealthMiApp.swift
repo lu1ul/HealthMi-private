@@ -98,6 +98,7 @@ struct HealthMiApp: App {
 
             guard claim.shouldRun else { return .succeeded }
             let run = claim.record
+            try? SyncRunStore.markRunning(run.id)
 
             do {
                 let container = try await AppDatabase.shared.prepare()

@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A1B2C3D4E5F60718293A4B01 /* SyncRunStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60718293A4B02 /* SyncRunStore.swift */; };
 		C016DADA0000000000000001 /* CoreDataModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = C016DADA0000000000000002 /* CoreDataModels.swift */; };
 		00B6417CEF09B90A63A9E08C /* SyncEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = FAE42963B0DA22F1D3A79BD4 /* SyncEngine.swift */; };
 		0A354162109CDE65AA26CC7C /* SyncEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E84D3AB8A04983B253EB8C2D /* SyncEngineTests.swift */; };
@@ -60,6 +61,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		A1B2C3D4E5F60718293A4B02 /* SyncRunStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncRunStore.swift; sourceTree = "<group>"; };
 		C016DADA0000000000000002 /* CoreDataModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreDataModels.swift; sourceTree = "<group>"; };
 		01EA0F17336B878185081390 /* MiWebLoginView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MiWebLoginView.swift; sourceTree = "<group>"; };
 		028389EDD4D2D68BA73947B0 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
@@ -216,6 +218,7 @@
 				A8E5A617ADC0F1D321F07B42 /* StressStore.swift */,
 				FAE42963B0DA22F1D3A79BD4 /* SyncEngine.swift */,
 				18B42438CD50B3EF106D0F3E /* SyncLogEntry.swift */,
+				A1B2C3D4E5F60718293A4B02 /* SyncRunStore.swift */,
 				A2192DFD76FD022C491DCAE0 /* SyncStateStore.swift */,
 			);
 			path = Sync;
@@ -381,6 +384,7 @@
 				39392FE6F057C695C299F592 /* SyncHistoryView.swift in Sources */,
 				4C589E48498704B55741C8D1 /* SyncIntent.swift in Sources */,
 				E5C22D99EF84596B7377DB65 /* SyncLogEntry.swift in Sources */,
+				A1B2C3D4E5F60718293A4B01 /* SyncRunStore.swift in Sources */,
 				B842B19DBFC2FDB99D43EC24 /* SyncStateStore.swift in Sources */,
 				429AC37EF4C3D2AEBDADB563 /* TrendChartView.swift in Sources */,
 				B0E4E89B69AEF0874176C1CD /* TypeMapper.swift in Sources */,
