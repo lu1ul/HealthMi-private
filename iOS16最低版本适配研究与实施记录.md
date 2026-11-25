@@ -193,3 +193,48 @@ IPA 已包含 `Metadata.appintents`，因此这不是动作注册失败。旧提
 - **静默路线：**保留 `openAppWhenRun = false`，将 Intent 改为快速提交任务，完整同步交给后台任务，并返回“已排队/已完成/失败”的明确状态。
 
 详细分析、证据和最小化实验步骤见 `HealthMi项目代码全面审查报告.md` 第 9.14 节。
+
+## 2026-11-25 最新静默排队版本：GitHub 构建与 IPA 独立核验
+
+### 构建结果
+
+- 远程仓库：`lu1ul/HealthMi-private`
+- GitHub Actions run：`45522292408`
+- 提交：`ab414c15773a7ba7a50c61d4dd2f3c4e3a4aad32`（`fix: make shortcut queue independent of app launch`）
+- Runner：`macos-15`，Xcode 16.4，部署目标 iOS 16.0
+- 结果：成功。Swift 编译、XcodeGen 工程生成、unsigned IPA、TrollStore IPA、entitlement 注入和解包后二次校验全部通过。
+- 下载方式：使用 `gh run download 45522292408 --repo lu1ul/HealthMi-private`，未使用浏览器。
+
+### IPA 文件与校验值
+
+- TrollStore IPA：`build/HealthMi-trollstore-shortcut-queue-45522292408/HealthMi-trollstore-healthkit-ipa/HealthMi-trollstore-healthkit.ipa`
+- TrollStore IPA SHA-256：`885ACBCA4A3E90EB4468D4A5321C4248F5FA23350475412E8B856857B034879B`
+- unsigned 对照 IPA：`build/HealthMi-trollstore-shortcut-queue-45522292408/HealthMi-unsigned-ipa/HealthMi-unsigned.ipa`
+- unsigned IPA SHA-256：`057242D2975FDDCF2FEF9466296E6523C3166F474EDF7AA6957E351146F867F4`
+
+### 本地解包检查
+
+对 TrollStore IPA 解包到 `build/ipa-inspect-45522292408/` 后，确认：
+
+- `Payload/HealthMi.app/HealthMi` 存在；
+- `Metadata.appintents/root.ssu.yaml`、`version.json` 和动作元数据存在；
+- `root.ssu.yaml` 包含 `SyncHealthDataIntent_0`（同步健康数据）和 `QueryLatestSyncStatusIntent_1`（查询最近同步状态）；
+- `Info.plist` 的 `MinimumOSVersion` 为 `16.0`；
+- `CFBundleIdentifier` 为 `com.healthmi.HealthMi`，版本为 `1.1.0`；
+- `BGTaskSchedulerPermittedIdentifiers` 包含 `com.healthmi.HealthMi.sync`；
+- `UIBackgroundModes` 包含 `fetch`；
+- HealthKit 读写用途说明均存在；
+- `LC_CODE_SIGNATURE` 存在；
+- `com.apple.developer.healthkit = true`；
+- TrollStore 所需 `application-identifier = TROLLTROLL.*`、`com.apple.developer.team-identifier = TROLLTROLL`、`get-task-allow = true` 和 `keychain-access-groups = [TROLLTROLL.*, com.apple.token]` 均存在；
+- 包内没有 `embedded.mobileprovision`，符合当前 TrollStore 伪签名产物路线。
+
+### 结论与真机步骤
+
+这次构建已经证明最新源码进入了可安装 IPA，且包级别同时具备 HealthKit 和 TrollStore Keychain entitlement。它不能在 Windows 上替代 iOS 16.3 真机对快捷指令帮助进程、BGTask 实际调度和系统回收行为的验证。
+
+安装测试应使用上述 `HealthMi-trollstore-healthkit.ipa`，不要使用 unsigned 对照包。为避免旧 App Intent 元数据和旧运行记录干扰，建议先删除旧版 HealthMi，安装新包后打开主 App 一次，确认账号和 HealthKit 仍可用，再从 HealthMi 重新添加“同步健康数据”和“查询最近同步状态”两个动作。快捷指令动作预期立即返回“已排队”，同步完成后再通过查询动作或通知读取结果。
+
+若新包仍显示“无法与帮助程序通信”或“App 意外退出”，下一步必须收集 iPhone 的 `HealthMi-*.ips` 或 `Shortcuts-*.ips`，重点查看 `Exception Type`、`Termination Reason` 和崩溃线程；静态代码和 IPA 包级分析已经不足以判断下一层原因。
+
+独立解析最终 IPA 的 Mach-O 签名 SuperBlob 后，确认 entitlement blob 中包含上述 HealthKit、TrollStore application/team identifier、`get-task-allow` 与 Keychain access groups。主程序 SHA-256：`7d7171b55d8ed693355d8b3eccc073718d73e4495fb584e01d358d088494d300`。

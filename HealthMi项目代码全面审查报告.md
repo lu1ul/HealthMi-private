@@ -1343,3 +1343,55 @@ Apple 文档要求 BGTask 必须在提交前注册，且所有 handler 要在应
 4. 凭据、数据库、HealthKit 和网络错误统一由后台同步写入详细运行结果。
 
 该版本仍需重新编译和真机验证。若仍提示 App 意外退出，则下一层证据必须是设备上的 `HealthMi` / Shortcuts `.ips` 崩溃报告，不能再仅靠静态推断。
+
+## 9.17 最新静默排队版本的远程构建与 IPA 核验（2026-11-25）
+
+### 构建证据
+
+本次继续使用个人私有仓库 `lu1ul/HealthMi-private`，没有向原仓库 `ShawnDiego/HealthMi` 推送。GitHub Actions run `45522292408` 对提交 `ab414c15773a7ba7a50c61d4dd2f3c4e3a4aad32` 执行了 Xcode 16.4 / iOS 16.0 设备目标构建，结果为成功。该 run 的构建步骤全部通过：XcodeGen 生成工程、Release 编译、unsigned IPA 打包、TrollStore entitlement 注入、解包后二次检查和 artifact 上传。
+
+本次产物通过 `gh` 下载，没有使用浏览器：
+
+- `build/HealthMi-trollstore-shortcut-queue-45522292408/HealthMi-trollstore-healthkit-ipa/HealthMi-trollstore-healthkit.ipa`
+- `build/HealthMi-trollstore-shortcut-queue-45522292408/HealthMi-unsigned-ipa/HealthMi-unsigned.ipa`
+
+### IPA 独立核验
+
+TrollStore IPA SHA-256 为 `885ACBCA4A3E90EB4468D4A5321C4248F5FA23350475412E8B856857B034879B`；unsigned 对照 IPA SHA-256 为 `057242D2975FDDCF2FEF9466296E6523C3166F474EDF7AA6957E351146F867F4`。
+
+对 TrollStore IPA 解包后的 `Payload/HealthMi.app/HealthMi`、`Info.plist` 和 `Metadata.appintents` 进行本地检查，结果如下：
+
+| 检查项 | 结果 |
+|---|---|
+| 最低系统版本 | `16.0` |
+| Bundle ID | `com.healthmi.HealthMi` |
+| App 版本 | `1.1.0` |
+| `LC_CODE_SIGNATURE` | 存在 |
+| HealthKit entitlement | `com.apple.developer.healthkit = true` |
+| TrollStore application identifier | `TROLLTROLL.*` |
+| TrollStore team identifier | `TROLLTROLL` |
+| Keychain access groups | `TROLLTROLL.*`, `com.apple.token` |
+| App Intents metadata | 存在 |
+| 同步动作 | `SyncHealthDataIntent_0` 存在 |
+| 状态查询动作 | `QueryLatestSyncStatusIntent_1` 存在 |
+| 后台任务白名单 | `com.healthmi.HealthMi.sync` 存在 |
+| HealthKit 用途说明 | Share / Update 均存在 |
+| `embedded.mobileprovision` | 不存在，符合 TrollStore 产物 |
+
+这组证据排除了“最新 IPA 没有编译进 App Intents”以及“最新 TrollStore IPA 没有 HealthKit/Keychain entitlement”两类包级问题。它仍不能证明快捷指令后台任务已经在 iOS 16.3 真机上被系统启动，因为 BGTask 的实际调度受系统资源、用户行为和设备状态影响。
+
+### 对当前快捷指令故障的更新判断
+
+最新提交把 `SyncHealthDataIntent.perform()` 收敛为只操作共享 `UserDefaults` 运行队列：不初始化 Core Data、不读取 Keychain、不检查 HealthKit、不运行网络同步，也不等待 HealthKit 写入。只有当前进程确认 `BGTaskScheduler.register` 成功时，才尝试提交立即调度；否则保留排队记录，等待主 App 启动时已经安排的周期刷新。完整同步、详细错误和本地通知都由后台任务处理。
+
+因此，若用户安装 run `45522292408` 的 TrollStore IPA 后仍出现帮助进程通信错误，优先怀疑范围已经缩小为：
+
+1. iOS 16.3 / TrollStore 对 App Intents 帮助进程的运行时兼容性；
+2. App Intent 进程在 `UserDefaults` 写队列或返回 `IntentDialog` 时被系统终止；
+3. 快捷指令保存了旧版动作元数据或旧动作实例；
+4. 设备侧存在未提供的 `Shortcuts` / `HealthMi` 崩溃报告；
+5. 后台任务未启动导致“已排队”长期不变，但这本身不应再表现为帮助进程崩溃。
+
+下一次真机验证要先删除旧版 HealthMi，并从新包重新添加两个快捷指令动作。如果仍崩溃，必须导出 `设置 → 隐私与安全性 → 分析与改进 → 分析数据` 中的 `HealthMi-*.ips` 和 `Shortcuts-*.ips`，否则无法区分 App Intent runtime、BGTask 注册和 TrollStore 伪签名环境造成的终止。
+
+独立解析最终 IPA 的 Mach-O 签名 SuperBlob 后，确认 entitlement blob 中包含上述 HealthKit、TrollStore application/team identifier、`get-task-allow` 与 Keychain access groups。主程序 SHA-256：`7d7171b55d8ed693355d8b3eccc073718d73e4495fb584e01d358d088494d300`。
