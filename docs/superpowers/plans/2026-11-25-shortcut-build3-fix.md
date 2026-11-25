@@ -23,10 +23,10 @@
 
 **Files:** Modify `HealthMi/App/SyncIntent.swift`.
 
-- [ ] Change both `perform()` signatures from `some IntentResult & ProvidesDialog` to `some IntentResult`.
-- [ ] Replace every `.result(dialog: IntentDialog(...))` with `.result()`; remove the dialog string variables and the private `queuedDialog` / `activeDialog` helpers.
-- [ ] Keep the existing error logging and `recordIntentReturn` events. Rename the error branch from `error_dialog` to `error_result` so logs reflect the new behavior.
-- [ ] In the existing active-run branch, resubmit only for `active.status == .queued`:
+- [x] Change both `perform()` signatures from `some IntentResult & ProvidesDialog` to `some IntentResult`.
+- [x] Replace every `.result(dialog: IntentDialog(...))` with `.result()`; remove the dialog string variables and the private `queuedDialog` / `activeDialog` helpers.
+- [x] Keep the existing error logging and `recordIntentReturn` events. Rename the error branch from `error_dialog` to `error_result` so logs reflect the new behavior.
+- [x] In the existing active-run branch, resubmit only for `active.status == .queued`:
 
 ```swift
 if active.status == .queued {
@@ -64,11 +64,11 @@ if active.status == .queued {
 }
 ```
 
-- [ ] Preserve the existing queued record on rescheduling error. Do not reschedule a `.running` record.
-- [ ] Leave `staleQueuedInterval` at 24 hours and preserve stale transition logging.
-- [ ] Run `rg -n "ProvidesDialog|result\\(dialog:|IntentDialog" "HealthMi/App/SyncIntent.swift"`; expected output is empty.
-- [ ] Run `git diff --check`; expected exit code is 0.
-- [ ] Commit as `fix: avoid shortcut dialog crash and retry queued sync`.
+- [x] Preserve the existing queued record on rescheduling error. Do not reschedule a `.running` record.
+- [x] Leave `staleQueuedInterval` at 24 hours and preserve stale transition logging.
+- [x] Run `rg -n "ProvidesDialog|result\\(dialog:|IntentDialog" "HealthMi/App/SyncIntent.swift"`; expected output is empty.
+- [x] Run `git diff --check`; expected exit code is 0.
+- [x] Commit as `fix: avoid shortcut dialog crash and retry queued sync`.
 
 ## Task 2: Mark the device build
 

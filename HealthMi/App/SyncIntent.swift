@@ -59,7 +59,7 @@ struct SyncHealthDataIntent: AppIntent {
     nonisolated static let openAppWhenRun = false
 
     @MainActor
-    func perform() async throws -> some IntentResult & ProvidesDialog {
+    func perform() async throws -> some IntentResult {
         defer { DiagnosticLogger.flush() }
         let invocation = ShortcutInvocation()
         DiagnosticLogger.record(
@@ -74,12 +74,10 @@ struct SyncHealthDataIntent: AppIntent {
 
             let record: SyncRunRecord
             let resultBranch: String
-            let dialog: String
 
             if let active = try SyncRunStore.active() {
-                resultBranch = "reused_active"
                 record = active
-                dialog = activeDialog(for: active)
+                resultBranch = active.status == .queued ? "reused_queued" : "reused_running"
                 DiagnosticLogger.record(
                     .notice,
                     category: .appIntent,
@@ -93,14 +91,44 @@ struct SyncHealthDataIntent: AppIntent {
                         "queueAgeSeconds": String(max(0, Int(Date().timeIntervalSince(active.queuedAt)))),
                     ])
                 )
+
+                if active.status == .queued {
+                    do {
+                        let scheduled = try BackgroundSync.scheduleFromIntentIfRegistered(immediate: true)
+                        DiagnosticLogger.record(
+                            scheduled ? .info : .notice,
+                            category: .appIntent,
+                            event: "shortcut.sync.perform.queued_reschedule_attempted",
+                            message: scheduled
+                                ? "复用中的排队任务已重新提交后台调度请求"
+                                : "复用中的排队任务仍在队列中，当前进程未确认后台处理器注册",
+                            runID: active.id,
+                            metadata: invocation.metadata([
+                                "status": active.status.rawValue,
+                                "trigger": active.trigger.rawValue,
+                                "queueAgeSeconds": String(max(0, Int(Date().timeIntervalSince(active.queuedAt)))),
+                                "scheduledImmediately": String(scheduled),
+                            ])
+                        )
+                    } catch {
+                        DiagnosticLogger.record(
+                            .error,
+                            category: .appIntent,
+                            event: "shortcut.sync.perform.queued_reschedule_failed",
+                            message: "复用中的排队任务重新提交后台调度失败；保留原排队记录",
+                            runID: active.id,
+                            error: error,
+                            metadata: invocation.metadata([
+                                "status": active.status.rawValue,
+                                "queueAgeSeconds": String(max(0, Int(Date().timeIntervalSince(active.queuedAt)))),
+                            ])
+                        )
+                    }
+                }
             } else {
                 let enqueueResult = try enqueueRun(invocationID: invocation.id)
                 record = enqueueResult.record
                 resultBranch = "queued"
-                dialog = queuedDialog(
-                    for: enqueueResult.record,
-                    scheduledImmediately: enqueueResult.scheduledImmediately
-                )
                 DiagnosticLogger.record(
                     .info,
                     category: .appIntent,
@@ -122,7 +150,7 @@ struct SyncHealthDataIntent: AppIntent {
                 status: record.status.rawValue,
                 runID: record.id
             )
-            return .result(dialog: IntentDialog(stringLiteral: dialog))
+            return .result()
         } catch {
             let details = SyncErrorDetails.from(error)
             DiagnosticLogger.record(
@@ -139,12 +167,12 @@ struct SyncHealthDataIntent: AppIntent {
             recordIntentReturn(
                 eventPrefix: "shortcut.sync.perform",
                 invocation: invocation,
-                branch: "error_dialog",
+                branch: "error_result",
                 status: "failed",
                 level: .error,
                 error: error
             )
-            return .result(dialog: IntentDialog(stringLiteral: details.summary))
+            return .result()
         }
     }
 
@@ -205,26 +233,6 @@ struct SyncHealthDataIntent: AppIntent {
 
         return (record, scheduledImmediately)
     }
-
-    private func queuedDialog(for record: SyncRunRecord, scheduledImmediately: Bool) -> String {
-        [
-            "已排队（运行 ID：\(record.shortID)）",
-            "排队时间：\(record.queuedAt.formatted(date: .abbreviated, time: .shortened))",
-            scheduledImmediately
-                ? "已提交立即后台调度请求。完成后会发送详细通知。"
-                : "运行已保存在本地队列，将由已有周期后台刷新领取。",
-            "可运行“查询同步状态”查看排队、成功或具体错误。",
-        ].joined(separator: "\n")
-    }
-
-    private func activeDialog(for record: SyncRunRecord) -> String {
-        [
-            "已有同步任务（运行 ID：\(record.shortID)）",
-            "当前状态：\(record.status.displayName)",
-            "排队时间：\(record.queuedAt.formatted(date: .abbreviated, time: .shortened))",
-            "不会重复排队；可运行“查询同步状态”查看详细结果。",
-        ].joined(separator: "\n")
-    }
 }
 
 /// 查询最近一次同步的运行级状态和详细错误。
@@ -234,7 +242,7 @@ struct QueryLatestSyncStatusIntent: AppIntent {
     nonisolated static let openAppWhenRun = false
 
     @MainActor
-    func perform() async throws -> some IntentResult & ProvidesDialog {
+    func perform() async throws -> some IntentResult {
         defer { DiagnosticLogger.flush() }
         let invocation = ShortcutInvocation()
         DiagnosticLogger.record(
@@ -254,13 +262,12 @@ struct QueryLatestSyncStatusIntent: AppIntent {
                     message: "当前没有同步运行记录",
                     metadata: invocation.metadata()
                 )
-                let dialog = "暂无同步运行记录。"
                 recordIntentReturn(
                     eventPrefix: "shortcut.status_query.perform",
                     invocation: invocation,
                     branch: "empty"
                 )
-                return .result(dialog: IntentDialog(stringLiteral: dialog))
+                return .result()
             }
             DiagnosticLogger.record(
                 .info,
@@ -275,7 +282,6 @@ struct QueryLatestSyncStatusIntent: AppIntent {
                     "queueAgeSeconds": String(max(0, Int(Date().timeIntervalSince(record.queuedAt)))),
                 ])
             )
-            let dialog = record.dialogText
             recordIntentReturn(
                 eventPrefix: "shortcut.status_query.perform",
                 invocation: invocation,
@@ -283,7 +289,7 @@ struct QueryLatestSyncStatusIntent: AppIntent {
                 status: record.status.rawValue,
                 runID: record.id
             )
-            return .result(dialog: IntentDialog(stringLiteral: dialog))
+            return .result()
         } catch {
             let details = SyncErrorDetails.from(error)
             DiagnosticLogger.record(
@@ -300,12 +306,12 @@ struct QueryLatestSyncStatusIntent: AppIntent {
             recordIntentReturn(
                 eventPrefix: "shortcut.status_query.perform",
                 invocation: invocation,
-                branch: "error_dialog",
+                branch: "error_result",
                 status: "failed",
                 level: .error,
                 error: error
             )
-            return .result(dialog: IntentDialog(stringLiteral: details.summary))
+            return .result()
         }
     }
 }
