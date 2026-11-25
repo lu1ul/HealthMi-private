@@ -1478,11 +1478,21 @@ TrollStore IPA SHA-256 为 `885ACBCA4A3E90EB4468D4A5321C4248F5FA23350475412E8B85
 
 - 日志调用不写凭据、Cookie、Authorization、请求/响应正文或健康样本值；元数据键按敏感字段名单过滤，常见键值凭据和 URL 查询参数会被脱敏。`os.Logger` 中详细摘要使用 private 隐私级别。
 - 本地 Windows 环境没有 `swift` / `xcodebuild`，当前已执行 `git diff --check`；未运行 XCTest。源码变更提交为 `176c2d0 feat: instrument diagnostic logging across app flows`。
-- GitHub Actions iOS 16.0 Release 构建、IPA 的 HealthKit/TrollStore entitlement、App Intents metadata、MinimumOSVersion 和 SHA-256 核验尚待完成。构建只证明编译与包结构；快捷指令/后台任务/HealthKit 真机行为还需要 iOS 16.3 TrollStore 设备验证。
+- 此节初稿记录时 GitHub Actions 构建尚待完成；run `45548504889` 后已成功构建并核验 iOS 16.0 IPA，具体产物、entitlement、App Intents metadata、最低系统版本和 SHA-256 见 9.21 节。快捷指令/后台任务/HealthKit 真机行为仍需 iOS 16.3 TrollStore 设备验证。
 - 设计与用户新增复制/查看要求保存在 `docs/superpowers/specs/2026-11-25-diagnostic-logging-design.md`，README 和 CHANGELOG 已同步描述本地日志查看、复制及导出功能。
 
 ### 9.20 日志功能 IPA 构建排错（2026-11-25）
 
 GitHub Actions run `45547761743` 的 Release 编译在 `DiagnosticLogging.swift` 第 248 行失败。唯一明确 Swift 错误为：`cannot use mutating member on immutable value: 'url' is a 'let' constant`。`URL.setResourceValues(_:)` 会修改 URL 值，不能在不可变参数上调用。源码已改为先将传入 URL 复制到局部可变变量，再设置 `isExcludedFromBackup`。
 
-该修复尚待新的 GitHub Actions 编译验证。run `45547761743` 没有生成 IPA（打包和上传步骤均被跳过），所以此前任何已存在的 IPA 都不是这次新增诊断日志功能对应的构建产物。仅在新 run 成功后再记录并核验产物的 MinimumOSVersion、HealthKit/TrollStore entitlement、App Intents metadata 与 SHA-256。
+当时该修复尚待新的 GitHub Actions 编译验证；后续成功构建和核验结果见 9.21 节。run `45547761743` 没有生成 IPA（打包和上传步骤均被跳过），所以此前任何已存在的 IPA 都不是这次新增诊断日志功能对应的构建产物。
+
+### 9.21 日志功能成功构建与 IPA 核验（2026-11-25）
+
+- 修复提交 `9c0ac3c7f03b5c044a3df4eebf4e1c04cba03017` 已推送到个人私有仓库 `lu1ul/HealthMi-private`。GitHub Actions run `45548504889` 成功，使用 Xcode 16.4，目标为 iOS 16.0；Swift Release 编译、unsigned/TrollStore IPA 打包及上传、TrollStore 包 entitlement 注入和解包校验全部通过。
+- 通过 `gh run download` 下载到 `build/diagnostic-logging-45548504889/`：
+  - TrollStore：`HealthMi-trollstore-healthkit-ipa/HealthMi-trollstore-healthkit.ipa`，2,089,000 字节，SHA-256 `7C3E631F099FB131865D712199F3CBBAE6B5A6BC48803B1982AE4D4295788B8D`。
+  - unsigned：`HealthMi-unsigned-ipa/HealthMi-unsigned.ipa`，2,030,601 字节，SHA-256 `9BC35A0F15D067087A8DE60D41C2CF0F74FB56AF0118B2B522E8ACF59567B7EF`。
+- 本地解包检查两包均为 `MinimumOSVersion=16.0`、Bundle ID `com.healthmi.HealthMi`、版本 `1.1.0`；HealthKit 用途说明、BGTask 标识与 `fetch` 后台模式存在。`Metadata.appintents/root.ssu.yaml` 含同步和查询最近同步状态两个动作。主程序二进制包含诊断日志页面、复制筛选文本、JSON 诊断文件导出的界面字符串。
+- TrollStore IPA 的工作流 entitlement 报告确认 `LC_CODE_SIGNATURE` 存在、HealthKit entitlement 为 true、TrollStore identifiers、`get-task-allow`、Keychain access groups 正确，且包内无 `embedded.mobileprovision`。主程序 SHA-256：`13A2260C8800EFBD17E60B86114009B85974B99D38BC7E7D461E30AE5A48FE6D`。unsigned 包用于后续自行签名。
+- 这些结果证明云端编译成功且产物结构符合预期，不替代 iPhone 上的实际 UI、日志采集、复制/导出和 iOS 16.3 运行验证。

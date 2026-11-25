@@ -254,14 +254,22 @@ IPA 已包含 `Metadata.appintents`，因此这不是动作注册失败。旧提
 
 - `git diff --check` 已通过；未运行 XCTest。当前 Windows 环境没有 `swift` 或 `xcodebuild`，需要 GitHub Actions Xcode 16.4 Release build 验证 iOS 16 编译。
 - `gh auth status` 确认登录账号为 `lu1ul`。为生成 IPA，当前阶段会按既有授权推送到 `lu1ul/HealthMi-private`，绝不推送到 `ShawnDiego/HealthMi`。
-- 埋点代码本地 commit：`176c2d0 feat: instrument diagnostic logging across app flows`。README、CHANGELOG、审查报告及本文件的实现记录仍待本阶段本地提交。
-- IPA 构建与解包核验尚未完成；当前不能把源码实现等同于已编译 IPA，也不能称功能已在 iPhone 真机运行验证。
+- 日志查看/复制/导出界面实现提交：`db32c9e`；详细埋点提交：`176c2d0`；README、CHANGELOG 和设计/实施记录已在 `8e34e73` 等文档提交中同步。
+- 初次记录时 IPA 构建与解包核验尚未完成；最终 GitHub Actions 构建和 IPA 核验结果见下方“日志功能构建与产物核验”。
 
 ### GitHub Actions 构建排错记录（2026-11-25）
 
-- 日志功能提交后首次构建 run `45547199421` 在 Swift 编译阶段失败；修复 URL 资源值设置实现后，第二次 run `45547761743` 仍返回同一编译错误。
+- 日志功能提交后首次构建 run `45547199421` 在 Swift 编译阶段因调用不存在的 `URL.setResourceValue` 失败；改用 `URL.setResourceValues` 后，第二次 run `45547761743` 因 URL 参数不可变而失败。
 - 失败位置为 `HealthMi/Support/DiagnosticLogging.swift`：`URL.setResourceValues(_:)` 是 mutating 方法，而方法参数 `url` 默认不可变。修复为接收初始 URL 后复制到局部 `var url`，再设置排除备份属性。
-- 此错误尚未由 GitHub Actions 上的新构建验证；在新的构建完成前，不能宣称 IPA 已生成。工作流与远程分支仍限定为 `lu1ul/HealthMi-private`，不推送 `origin`。
+- 修复提交：`9c0ac3c fix: make diagnostic log URLs mutable`。最终构建结果和 IPA 校验已由 run `45548504889` 验证，见下一节；整个流程只推送至 `lu1ul/HealthMi-private`，没有推送 `origin`。
+
+### 日志功能构建与产物核验（2026-11-25）
+
+- GitHub Actions run `45548504889`（Xcode 16.4，macOS runner，iOS deployment target 16.0）成功完成。Release 编译、unsigned IPA 打包、TrollStore entitlement 注入、IPA 解包复核和两个 artifact 上传步骤全部通过。构建源码提交为 `9c0ac3c7f03b5c044a3df4eebf4e1c04cba03017`。
+- 两个产物均通过 `gh run download` 下载到仓库忽略目录 `build/diagnostic-logging-45548504889/`；未使用浏览器。TrollStore 包大小 2,089,000 字节，SHA-256 `7C3E631F099FB131865D712199F3CBBAE6B5A6BC48803B1982AE4D4295788B8D`；unsigned 包大小 2,030,601 字节，SHA-256 `9BC35A0F15D067087A8DE60D41C2CF0F74FB56AF0118B2B522E8ACF59567B7EF`。
+- 对两个 IPA 本地解包检查确认：`MinimumOSVersion=16.0`、Bundle ID `com.healthmi.HealthMi`、版本 `1.1.0`；HealthKit 用途说明、后台任务标识与 `fetch` 模式存在；`Metadata.appintents` 存在，并含“同步健康数据”和“查询最近同步状态”动作元数据。主程序中也能找到诊断日志页面、复制按钮和 JSON 文件导出的界面文本。
+- TrollStore artifact 的工作流 entitlement 报告确认 `LC_CODE_SIGNATURE` 存在、HealthKit entitlement 为 true、TrollStore application/team identifier、`get-task-allow` 与 Keychain access groups 已注入，且无 `embedded.mobileprovision`。该包主程序 SHA-256 为 `13A2260C8800EFBD17E60B86114009B85974B99D38BC7E7D461E30AE5A48FE6D`。unsigned IPA 保持未签名用途，供后续自行签名路线使用。
+- 本次验证覆盖云端编译和包结构，不等同于 iPhone 真机运行验证；诊断页面交互、日志实际采集、复制/分享和 iOS 16.3 真机行为仍需设备验证。
 
 ## 2026-11-25 快捷指令仍提示通信失败/应用退出：根因重排
 
