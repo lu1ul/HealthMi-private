@@ -271,6 +271,12 @@ IPA 已包含 `Metadata.appintents`，因此这不是动作注册失败。旧提
 - TrollStore artifact 的工作流 entitlement 报告确认 `LC_CODE_SIGNATURE` 存在、HealthKit entitlement 为 true、TrollStore application/team identifier、`get-task-allow` 与 Keychain access groups 已注入，且无 `embedded.mobileprovision`。该包主程序 SHA-256 为 `13A2260C8800EFBD17E60B86114009B85974B99D38BC7E7D461E30AE5A48FE6D`。unsigned IPA 保持未签名用途，供后续自行签名路线使用。
 - 本次验证覆盖云端编译和包结构，不等同于 iPhone 真机运行验证；诊断页面交互、日志实际采集、复制/分享和 iOS 16.3 真机行为仍需设备验证。
 
+### iOS 16.3 快捷指令日志复核（2026-11-25）
+
+用户提供的 2026-11-25 06:16:55Z–06:17:24Z 设备日志显示，快捷指令三次进入 `perform()`，均复用了同一个状态为 `queued` 的运行记录；两次应用启动均成功注册 BGTask handler，并检测到待处理队列、成功提交调度请求，但日志中没有后台 handler 开始或领取队列的记录。现有证据表明问题已越过“快捷指令动作未运行”阶段，停在队列派发/执行，或 Intent 结果返回边界，尚不能仅凭此日志确认系统报错根因。
+
+诊断日志需要补强：一键复制文本应包含结构化日志已有的 PID/主线程字段；每次 Intent 需要独立调用 ID 和明确的结果准备/返回前事件；队列复用日志应记录排队时间、年龄和触发来源。详细证据与代码路径分析见《HealthMi项目代码全面审查报告.md》9.22 节。此次仅更新分析文档，没有修改程序行为，也没有生成新 IPA。
+
 ## 2026-11-25 快捷指令仍提示通信失败/应用退出：根因重排
 
 用户反馈最新快捷指令仍显示“无法与帮助程序通信”，再次执行出现“因为 App 意外退出”。路线二已经把同步 Intent 主体缩减为轻量运行记录和可选 BGTask 提交；因此此前“Intent 直接执行九类完整同步导致超时”的解释不能再作为主结论。

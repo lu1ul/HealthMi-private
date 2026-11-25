@@ -1496,3 +1496,28 @@ GitHub Actions run `45547761743` 的 Release 编译在 `DiagnosticLogging.swift`
 - 本地解包检查两包均为 `MinimumOSVersion=16.0`、Bundle ID `com.healthmi.HealthMi`、版本 `1.1.0`；HealthKit 用途说明、BGTask 标识与 `fetch` 后台模式存在。`Metadata.appintents/root.ssu.yaml` 含同步和查询最近同步状态两个动作。主程序二进制包含诊断日志页面、复制筛选文本、JSON 诊断文件导出的界面字符串。
 - TrollStore IPA 的工作流 entitlement 报告确认 `LC_CODE_SIGNATURE` 存在、HealthKit entitlement 为 true、TrollStore identifiers、`get-task-allow`、Keychain access groups 正确，且包内无 `embedded.mobileprovision`。主程序 SHA-256：`13A2260C8800EFBD17E60B86114009B85974B99D38BC7E7D461E30AE5A48FE6D`。unsigned 包用于后续自行签名。
 - 这些结果证明云端编译成功且产物结构符合预期，不替代 iPhone 上的实际 UI、日志采集、复制/导出和 iOS 16.3 运行验证。
+
+### 9.22 iOS 16.3 快捷指令错误日志分析（2026-11-25）
+
+用户提供的日志覆盖 2026-11-25 06:16:55Z–06:17:24Z（中国标准时间 14:16:55–14:17:24），设备系统为 iOS 16.3（20D47），App 为 1.1.0 build 1。日志没有包含账号凭据或健康样本值。
+
+#### 已确定的执行阶段
+
+- 06:16:59Z、06:17:18Z、06:17:21Z 的三次快捷指令调用均记录了 `shortcut.sync.perform.started`，随后都记录 `shortcut.sync.perform.reused_active_run`，同一运行短 ID `3AC440E1`，状态始终为 `queued`。这证明快捷指令确实进入了 `SyncHealthDataIntent.perform()`，并成功读到已持久化的活动运行；它没有创建新队列记录。
+- 06:17:01Z 与 06:17:24Z 的应用启动记录显示 BGTask handler 注册成功、Core Data 加载成功、启动时检测到 `hasQueuedRun=true`，且 `background.schedule.completed` 记录提交请求成功。这里能确认调度请求提交调用没有抛错，不能据此确认系统实际启动了后台处理器。
+- 本段日志未出现 `background.handler.started`、`background.run.claimed`、同步运行开始/完成事件，也未出现快捷指令处理失败事件。因而当前证据将问题收窄到：排队后没有观察到 BGTask 领取/执行；或者 `perform()` 在记录“复用运行”后，快捷指令结果返回/序列化阶段仍失败。由于没有 Intent 返回前的明确终点事件，这两者暂时无法区分。
+- 日志中的 `healthkit.statistics.query.failed`（HRV，错误域/码 `com.apple.healthkit/11`）属于仪表盘 HealthKit 汇总查询；同一时间段其他摘要/趋势查询继续完成，且没有关联到该同步运行 ID。现有材料不足以把它认定为快捷指令通信错误的原因。
+
+#### 代码层面的重要线索
+
+`SyncHealthDataIntent.perform()` 发现活动运行后直接返回 `activeDialog(for:)`，这一分支不会再次调用 `scheduleFromIntentIfRegistered()`。因此只要运行仍为 `queued`，重复点击快捷指令就会复用旧记录而不重提调度请求。`SyncRunStore.markStale()` 要到队列最后更新时间超过 24 小时才会把 queued 记录标记失败；短时间内反复运行会继续看到同一个 queued 状态。App 冷启动路径会在发现 queued 后尝试提交立即调度请求，日志中的两条成功提交与此吻合，但仍没有 handler 执行记录。
+
+#### 当前日志功能的缺口与优化建议
+
+- 结构化事件已保存 `processID`、`isMainThread`，单条详情页也显示这些字段；但“一键复制”生成的文本行没有包含它们，导致无法判断 App 启动与 Intent 事件是否来自同一进程/线程。复制文本应带上 PID 和主线程标记。
+- 目前 `runID` 标识同步运行，不标识每次快捷指令调用。建议为每次 `perform()` 生成独立 invocation ID，并写入开始、队列分支、结果准备和返回前日志，附带耗时与返回状态。这样可以区分 Intent 业务代码是否已完成，还是故障发生在系统接收/序列化结果时。
+- 活动队列复用事件只记录状态，没有 `queuedAt`、队列年龄和触发来源；建议补齐这些字段，并为 stale 迁移记录旧状态、新状态和超时阈值。
+- BGTask 已有 handler started/claimed/completed/expired 埋点，但应继续保证同一运行 ID 贯穿“提交请求—handler 收到任务—领取记录—同步开始—完成/过期”；目前这段日志缺少 handler 收到任务的证据。
+- 这份日志来自一键复制文本，而不是包含完整运行摘要的 JSON 诊断包；要确认 queued 记录的实际排队时间，可再执行“查询最近同步状态”并保留它的返回文本。要判断结果返回阶段是否崩溃，则仍需同一时间的 `HealthMi-*.ips`、`Shortcuts-*.ips` 或 `AppIntents-*.ips`。
+
+本节是对现有日志与源码的分析记录，尚未修改 App 行为或生成新的 IPA。当前最有把握的结论是快捷指令入口已运行，但同一 queued 同步记录未在日志窗口内进入可见的 BGTask handler 执行；“无法与帮助程序通信”的最终崩溃边界仍需 Intent 终点日志或系统 `.ips` 确认。
