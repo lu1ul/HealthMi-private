@@ -87,6 +87,12 @@
 
 `perform()` 不再创建完整同步 Task，也不再使用 55 秒 watchdog。
 
+### 4.2.1 真机崩溃后的安全收敛
+
+iOS 16.3 真机执行首版快速排队后仍出现“无法与帮助程序通信”，再次运行时提示 App 意外退出。Apple 要求所有 BGTask handler 在应用启动完成前注册；App Intent 帮助进程不保证经历同样完整的启动路径。
+
+因此 `perform()` 已进一步收敛为只写 `UserDefaults` 队列。Keychain、HealthKit 和 Core Data 检查全部移到后台执行，失败会写入运行记录。只有当前进程确认 `BGTaskScheduler.register` 返回成功时才提交立即调度；未确认注册时保留“已排队”，由 App 启动时已经提交的周期后台请求领取。
+
 ### 4.3 后台任务
 
 BGTask 处理器启动时先重新安排下一次周期刷新，然后领取现有 `queued` 运行；若没有手动排队记录，则为周期刷新创建新的 `background` 运行。同步过程中按类型更新运行记录，结束时根据结果写入最终状态。

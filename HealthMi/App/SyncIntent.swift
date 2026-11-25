@@ -1,7 +1,7 @@
 import AppIntents
 import Foundation
 
-/// "同步健康数据" App Intent：只负责快速校验并把完整同步排入后台。
+/// "同步健康数据" App Intent：只负责把完整同步写入轻量本地队列。
 ///
 /// Intent 返回时同步通常尚未开始。最终结果通过本地通知、同步历史以及
 /// `QueryLatestSyncStatusIntent` 查询；这样不会让快捷指令一直等待网络和 HealthKit。
@@ -13,8 +13,6 @@ struct SyncHealthDataIntent: AppIntent {
     @MainActor
     func perform() async throws -> some IntentResult {
         do {
-            CredentialStore.migrateIfNeeded()
-            _ = try await AppDatabase.shared.prepare()
             try SyncRunStore.markStale()
 
             guard let active = try SyncRunStore.active() else {
@@ -31,16 +29,12 @@ struct SyncHealthDataIntent: AppIntent {
 
     @MainActor
     private func enqueueRun() throws -> String {
-        guard try CredentialStore.loadThrowing() != nil else {
-            throw AppError.noCredentials
-        }
-        guard HealthKitManager.isAvailable else {
-            throw AppError.healthKitUnavailable
-        }
-
         let record = try SyncRunStore.create(trigger: .shortcut)
+        let scheduledImmediately: Bool
         do {
-            try BackgroundSync.schedule(immediate: true)
+            scheduledImmediately = try BackgroundSync.scheduleFromIntentIfRegistered(
+                immediate: true
+            )
         } catch {
             let details = SyncErrorDetails.from(error)
             try? SyncRunStore.finish(id: record.id, status: .failed, topLevelError: details)
@@ -50,7 +44,10 @@ struct SyncHealthDataIntent: AppIntent {
         let dialog = [
             "已排队（运行 ID：\(record.shortID)）",
             "排队时间：\(record.queuedAt.formatted(date: .abbreviated, time: .shortened))",
-            "后台同步由系统稍后执行。完成后会发送详细通知；可运行“查询最近同步状态”查看结果。",
+            scheduledImmediately
+                ? "已提交立即后台调度请求。完成后会发送详细通知。"
+                : "运行已保存在本地队列，将由已有周期后台刷新领取。",
+            "可运行“查询最近同步状态”查看排队、成功或具体错误。",
         ].joined(separator: "\n")
         return dialog
     }

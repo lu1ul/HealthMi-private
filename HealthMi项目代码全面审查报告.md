@@ -1328,3 +1328,18 @@ GitHub Actions run `45520859520` 使用 Xcode 16.4 编译 iOS 16 目标，发现
 - `Metadata.appintents/root.ssu.yaml` 已包含 `SyncHealthDataIntent_0` 与 `QueryLatestSyncStatusIntent_1`
 
 这证明源码和 App Intents 元数据进入了可安装 IPA。仍需 iOS 16.3 真机验证系统是否接受快捷指令提交的 BGTask、后台任务何时实际运行、通知正文是否完整，以及查询动作能否读到最终状态。远程编译不能证明 iOS 后台调度时序。
+
+#### 9.16 真机仍出现帮助进程退出及安全收敛
+
+用户在 iOS 16.3 上运行 run `45521059911` 的 IPA 后，先后看到“无法与帮助程序通信”和“无法进行操作，因为 App 意外退出”。这证明编译与 entitlement 正常，故障发生在 App Intent 运行时。
+
+Apple 文档要求 BGTask 必须在提交前注册，且所有 handler 要在应用启动结束前完成注册；同一进程第二次注册同一标识符会被系统终止。App Intent 帮助进程不保证走完与主 App UI 相同的启动路径，因此首版排队动作中的数据库准备和调度提交仍可能触发未注册任务或帮助进程资源问题。
+
+安全收敛方案：
+
+1. `SyncHealthDataIntent.perform()` 只读写 `UserDefaults` 队列，不打开 Core Data、不访问 Keychain、不初始化 HealthKit；
+2. `BackgroundSync` 保存 `BGTaskScheduler.register` 的真实返回值；
+3. 只有返回值为成功时才从快捷指令提交立即调度，否则返回“已排队”，等待已有的周期后台请求；
+4. 凭据、数据库、HealthKit 和网络错误统一由后台同步写入详细运行结果。
+
+该版本仍需重新编译和真机验证。若仍提示 App 意外退出，则下一层证据必须是设备上的 `HealthMi` / Shortcuts `.ips` 崩溃报告，不能再仅靠静态推断。

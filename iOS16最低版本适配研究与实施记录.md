@@ -114,6 +114,23 @@
 - App Intents 元数据：`Payload/HealthMi.app/Metadata.appintents/root.ssu.yaml` 同时包含 `SyncHealthDataIntent_0`（同步健康数据）和 `QueryLatestSyncStatusIntent_1`（查询最近同步状态）。
 - 本地使用 `gh run download` 获取产物，未使用浏览器下载。
 
+### iOS 16.3 真机上仍出现帮助进程退出
+
+安装 run `45521059911` 的 IPA 后，快捷指令仍先出现“无法与帮助程序通信”，再次运行时提示“无法进行操作，因为 App 意外退出”。
+
+Apple 后台任务文档说明：
+
+- `BGTaskScheduler.submit` 提交的必须是已经注册的后台任务；
+- 每个标识符只能注册一次，同一进程第二次注册会导致系统终止 App；
+- 所有 launch handler 必须在应用启动结束前注册完成。
+
+当前修复据此移除 App Intent 中的 Core Data、Keychain 和 HealthKit 初始化。它们都可能依赖完整 App 启动环境，而且不应出现在轻量排队动作里。App Intent 现在只写 `UserDefaults` 运行记录；只有当前进程已确认 BGTask handler 注册成功时才提交立即调度，否则等待 App 启动时已经排定的周期任务。
+
+资料：
+
+- [Apple `BGTaskScheduler.register`](https://developer.apple.com/documentation/backgroundtasks/bgtaskscheduler/register(fortaskwithidentifier:using:launchhandler:))
+- [Apple `BGTaskScheduler.submit`](https://developer.apple.com/documentation/backgroundtasks/bgtaskscheduler/submit(_:))
+
 ## 官方资料
 
 - [Apple SwiftData 文档](https://developer.apple.com/documentation/swiftdata)
