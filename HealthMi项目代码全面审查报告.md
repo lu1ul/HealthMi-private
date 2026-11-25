@@ -1563,3 +1563,13 @@ GitHub Actions run `45547761743` 的 Release 编译在 `DiagnosticLogging.swift`
 - [Apple `kLSDataUnavailableErr`](https://developer.apple.com/documentation/coreservices/klsdataunavailableerr)：解释系统日志中的 Launch Services 错误码 `-10813`。
 
 本节基于本次设备日志与对应源码分析，未包含原始个人设备日志。新版本实施、GitHub 构建和 IPA 包级核验状态以后续记录为准。
+
+### 9.24 对话框崩溃修复、快捷指令入口和下一版诊断增强（2026-11-25）
+
+根据 9.23 节中 App Intents 的 fatal error 记录，已修正两个 Intent 的返回签名为 `some IntentResult & ProvidesDialog`。此改动直接匹配 `.result(dialog:)` 返回能力，避免 App Intents 对结果类型校验失败。
+
+诊断部分为每次 Intent 生成独立 invocation ID；开始、队列创建/复用、结果准备和即将返回事件会携带该 ID 与耗时。活动队列分支记录排队 epoch、队列年龄、状态与触发来源；BGTask/用户动作使旧运行过期时，在成功保存失败状态后记录旧状态、新状态、年龄和失效阈值。一键复制日志行现在包含 PID 和主线程标志。
+
+快捷指令发现部分将查询 Intent 标题与短标题统一为“查询同步状态”，启动时调用 `HealthMiShortcuts.updateAppShortcutParameters()` 并留下刷新事件；仪表盘增加 `ShortcutsLink` 直达 HealthMi App Shortcuts 页面，同时在界面解释可添加的两个动作。`CURRENT_PROJECT_VERSION` 已从 1 提升为 2，Marketing Version 仍是 1.1.0。
+
+实施提交：根因文档 `13f4a2e`；返回类型修复 `9ad9c87`；诊断日志增强 `8846299`；快捷指令入口与 build 2 `41390eb`。本地 `git diff --check` 通过。当前处于 Windows 环境，未运行本机 Xcode 编译；即将把这些提交推送到私有远程 `personal`（`lu1ul/HealthMi-private`）触发 GitHub Actions。尚未生成本版 IPA，也尚未进行 iOS 16.3 真机复测；最终构建 ID、产物校验值和真机验证结果待后续补充。

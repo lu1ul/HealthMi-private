@@ -2,7 +2,7 @@
 
 日期：2026-11-25
 
-状态：用户已确认纳入下一版；根据设备统一日志增加了根因修复。
+状态：代码与诊断文档已实施并分别本地提交；等待私有 GitHub Actions 构建和 iOS 16.3 真机复测。
 
 ## 背景
 
@@ -46,6 +46,15 @@ func perform() async throws -> some IntentResult & ProvidesDialog
 5. App 启动时调用 `HealthMiShortcuts.updateAppShortcutParameters()` 并记录清单刷新事件；将查询 Intent 标题和 App Shortcut 短标题统一为“查询同步状态”。
 6. 在仪表盘增加 `ShortcutsLink`，直达 HealthMi 的 App Shortcuts 页面；提升 `CURRENT_PROJECT_VERSION` 到 2。
 7. 更新全面审查报告、iOS 16 适配记录、CHANGELOG，并完成静态差异检查和 GitHub Actions IPA 构建/包结构核验。按用户要求，每个阶段仅在本地 commit；构建推送目标为用户私有仓库 `lu1ul/HealthMi-private`，不推送到原始仓库。
+
+## 当前实施提交
+
+- `13f4a2e docs: diagnose shortcut intent crash`
+- `9ad9c87 fix: declare shortcut dialog result capabilities`
+- `8846299 feat: trace shortcut intent return lifecycle`
+- `41390eb feat: expose shortcut discovery in app`
+
+本地 `git diff --check` 已通过；当前尚未完成 GitHub Xcode 编译、IPA 核验或设备复测。
 
 ## 验证边界
 

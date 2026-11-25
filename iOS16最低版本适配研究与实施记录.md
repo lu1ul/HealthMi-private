@@ -297,3 +297,21 @@ Apple 官方来源：
 - [Creating your first app intent](https://developer.apple.com/documentation/appintents/creating-your-first-app-intent)
 - [`openAppWhenRun`](https://developer.apple.com/documentation/appintents/appintent/openappwhenrun-223b1)
 - [`BGTaskScheduler.register`](https://developer.apple.com/documentation/backgroundtasks/bgtaskscheduler/register%28fortaskwithidentifier%3Ausing%3Alaunchhandler%3A%29)
+
+## 2026-11-25 App Intents 返回契约与快捷指令发现入口
+
+用户从 iPhone iOS 16.3 + TrollStore 收集的 `pymobiledevice3` 系统日志直接指出：App Intents 返回 `.result(dialog:)` 后，运行时发现 `perform()` 签名未声明 `ProvidesDialog`；随后 Swift runtime fatal error，进程以 `SIGTRAP(5)` 退出，Shortcuts runner 才报告 XPC 1004/4097。两个 Intent 已改为 `some IntentResult & ProvidesDialog`。Apple `ProvidesDialog` 文档和官方 App Intent 模板均要求方法签名表达这项返回能力。
+
+同一日志中 Core Data 已成功加载；因此该故障的直接代码根因不是 TrollStore entitlement 或数据库，而是 Intent 返回类型契约。
+
+查询动作未显示是独立问题：上一版 IPA 的 App Intents `root.ssu.yaml` 有同步和查询两个动作，但本次运行日志只执行同步动作，不能单独说明 Shortcuts 列表为何隐藏查询动作。下一版在 App 启动时调用 `HealthMiShortcuts.updateAppShortcutParameters()`、将查询标题统一成“查询同步状态”、在仪表盘增加 `ShortcutsLink` 并把 build number 提升至 2，用于刷新和直达系统 App Shortcuts 页面；iOS 16.3 TrollStore 上仍需真机检查最终索引展示。
+
+日志采集增强包括 invocation ID、Intent 结果准备/返回前事件、队列年龄/来源、stale 运行迁移细节，以及复制文本内的 PID/主线程标记。源码提交为 `9ad9c87`、`8846299`、`41390eb`；完整设备日志分析和设计见 `HealthMi项目代码全面审查报告.md` 9.23–9.24 节和 `docs/superpowers/specs/2026-11-25-shortcut-return-and-discovery-fix-design.md`。
+
+参考 Apple 官方资料：
+
+- [App Intents `ProvidesDialog`](https://developer.apple.com/documentation/appintents/providesdialog)
+- [在 App 初始化时更新 App Shortcuts](https://developer.apple.com/documentation/appintents/acceleratingappinteractionswithappintents)
+- [`ShortcutsLink`](https://developer.apple.com/documentation/appintents/shortcutslink)
+
+此记录写入时 `git diff --check` 已通过；GitHub Actions 编译和 IPA 核验尚待完成，不能据此宣称新 IPA 已生成。
