@@ -234,6 +234,18 @@ struct DashboardView: View {
                 }
 
                 Section {
+                    NavigationLink {
+                        DiagnosticsLogView()
+                    } label: {
+                        Label("查看诊断日志", systemImage: "doc.text.magnifyingglass")
+                    }
+                } header: {
+                    Text("问题诊断")
+                } footer: {
+                    Text("遇到快捷指令、后台同步、登录或健康权限问题时，可在这里查看、复制或导出脱敏日志。")
+                }
+
+                Section {
                     Button("退出登录并清除小米凭据", role: .destructive) {
                         model.disconnect(modelContext: modelContext)
                     }

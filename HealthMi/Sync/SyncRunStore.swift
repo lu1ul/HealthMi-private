@@ -231,6 +231,10 @@ enum SyncRunStore {
         try load().first
     }
 
+    static func allThrowing() throws -> [SyncRunRecord] {
+        try load()
+    }
+
     static func record(for id: UUID) -> SyncRunRecord? {
         (try? load())?.first { $0.id == id }
     }
