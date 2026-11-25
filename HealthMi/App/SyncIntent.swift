@@ -11,7 +11,7 @@ struct SyncHealthDataIntent: AppIntent {
     nonisolated static let openAppWhenRun = false
 
     @MainActor
-    func perform() async throws -> some IntentResult {
+    func perform() async throws -> some IntentResult & ProvidesDialog {
         defer { DiagnosticLogger.flush() }
         let intentStartedAt = Date()
         DiagnosticLogger.record(
@@ -126,7 +126,7 @@ struct QueryLatestSyncStatusIntent: AppIntent {
     nonisolated static let openAppWhenRun = false
 
     @MainActor
-    func perform() async throws -> some IntentResult {
+    func perform() async throws -> some IntentResult & ProvidesDialog {
         defer { DiagnosticLogger.flush() }
         DiagnosticLogger.record(
             .info,
