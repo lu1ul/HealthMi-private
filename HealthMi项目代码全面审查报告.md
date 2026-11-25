@@ -12,10 +12,10 @@
 - **数据同步已在 iOS 16.3 真机确认成功。** 小米账号登录成功，数据可以从小米云端同步并写入 Apple 健康。
 - **Keychain `-34018` 已确认是旧 TrollStore entitlement 打包缺口，并已修复。** 新产物同时含 `com.apple.developer.healthkit = true` 与 `keychain-access-groups = [TROLLTROLL.*, com.apple.token]`，真机登录已通过。
 - **iOS 16 最低版本适配的主流程已通过真机验收。** Core Data 存储、HealthKit 写入和 TrollStore 安装路径没有阻止 iOS 16.3 运行。
-- **快捷指令崩溃在 build 2 的 iOS 16.3 真机上仍然复现。** 新日志再次出现 `Did not declare ProvidesDialog but provided one`，随后 HealthMi PID `82873` 以 `SIGTRAP(5)` 退出。此前虽将源码返回签名改为 `some IntentResult & ProvidesDialog` 并成功构建，设备运行时仍判定返回契约未声明；因此此前“已修复”的结论不成立。后续要排除设备仍运行旧快捷指令定义/系统元数据的影响，或去掉 dialog 返回路径，用不返回对话框的 Intent 结果验证 iOS 16.3 兼容性。详见第 9.25 节。
-- **build 3 源码修复已在本地提交，尚待 GitHub 构建和真机复测。** 两个 Intent 改为只返回 `.result()`；复用 `queued` 记录时再次尝试立即提交 BGTask，失败则保留队列并写详细日志；24 小时 stale 阈值保持不变。构建产物尚未生成，不能据此宣称 iOS 16.3 runtime 已修复。详见第 9.26 节。
-- **同步快捷指令还卡在一个旧的 queued 运行记录。** build 2 日志连续复用运行 ID `3AC440E1`，排队年龄约 6 小时 49 分；代码对 queued 记录采用 24 小时过期阈值，故仍认作活动任务。应用启动时虽然成功提交 BGTask 请求，但没有观察到后台 handler 开始/领取记录。即使修正 Intent 崩溃，该旧队列也可能让用户反复得到“已有任务”而不启动新的同步。详见第 9.25 节。
-- **“查询同步状态”在快捷指令列表中是否出现仍待设备确认。** 本次日志记录的是同步动作执行，没有记录用户打开或搜索动作列表；新版加入启动时刷新 App Shortcuts、统一动作标题和仪表盘快捷指令入口，但这些包级改动不能代替 iOS 16.3 上的实际发现与运行验证。详见第 9.24 节。
+- **build 3 的同步快捷指令已在 iOS 16.3 真机完成一次无崩溃调用，Shortcuts 也记录 workflow 成功。** 系统日志确认 `SyncHealthDataIntent` action 和 shortcut workflow 均 `completed=1` / `success: yes`；HealthMi 创建/复用运行 `A52E4AA5-0E8C-4414-868D-6B5FAA0DF6EC`、成功提交 BGTask 请求并正常返回。同步数据本身仍未开始，详见第 9.28–9.29 节。
+- **后台同步是否执行仍未确认。** 运行历史显示“已排队”符合快速返回设计，但不是同步成功；本次日志没有 `background.handler.started`、领取运行或该 run 的完成状态。系统接收 BGTask request 不保证按 `earliestBeginDate` 启动。详见第 9.28 节。
+- **“查询同步状态”在 iOS 16.3 的动作列表中仍未出现，属于未解决的发现问题。** build 3 源码和 IPA metadata 均包含该动作，但设备只显示“同步健康数据”。设备系统日志显示打开 App Shortcuts 页后，Shortcuts/linkd 在获取 HealthMi action/phrase 时发生 FBS Code 5；这可能与发现异常相关，但日志隐藏了具体 phrase，不能断定它专指查询动作。`ShortcutsLink` 是打开 HealthMi App Shortcuts 页面的按钮，不是第三个快捷指令动作。详见第 9.29 节。
+- **FBS Code 5 已与实际同步 Intent 执行区分。** Code 5 发生在 `ShortcutsLink` 跳转后、Shortcuts 尝试获取 HealthMi App Intent action 的 `LNEmbeddedApplicationConnection` 路径；11 秒后手动同步 Intent 由 BackgroundShortcutRunner 成功打开 HealthMi 并完成。前者是入口/发现连接问题，不是本次同步 `perform()` 的失败；更深层的 LinkServices/iOS 16.3 原因仍待定位。
 - **诊断日志源码已进入成功构建的 build 2。** 日志页、复制筛选文本和 JSON 文件导出，以及网络、HealthKit、快捷指令、后台任务、Keychain、登录和通知埋点均已实现；新版 IPA 已生成。此前的代码阶段提交 `176c2d0` 不再是“尚待编译”状态。详见第 9.19、9.24 节。
 
 ## 一、结论摘要
@@ -1626,6 +1626,112 @@ HealthKit HRV 汇总查询错误 `com.apple.healthkit/11` 没有关联同步 `ru
 - `QueryLatestSyncStatusIntent` 的描述和完成日志改为明确说明查询动作无弹窗、详细内容在 App 查看，避免对 Shortcuts 可见行为作错误承诺。
 - `project.yml` 的 `CURRENT_PROJECT_VERSION` 升为 `3`，Marketing Version 保持 `1.1.0`，最低系统版本保持 `16.0`。
 
-源码静态检查已确认 `HealthMi/App/SyncIntent.swift` 不再包含 `ProvidesDialog`、`IntentDialog` 或 `.result(dialog:)`；`git diff --check` 通过。尚未运行 GitHub Actions，也尚未取得 build 3 IPA。真机是否不再 fatal、后台调度是否被系统领取，均仍待 iOS 16.3 + TrollStore 复测。
+源码静态检查已确认 `HealthMi/App/SyncIntent.swift` 不再包含 `ProvidesDialog`、`IntentDialog` 或 `.result(dialog:)`；`git diff --check` 通过。GitHub Actions 和 build 3 IPA 包结构验证结果见第 9.27 节；真机是否不再 fatal、后台调度是否被系统领取，均仍待 iOS 16.3 + TrollStore 复测。
 
-本阶段提交：`5a89e82`（移除 dialog 并重试 queued）、`62c0694`（澄清静默状态查询描述）、`f25d3a2`（build number 3）。设计记录提交 `fc6c33f`，实施计划提交 `d582307`。构建和包核验结果将在取得 artifact 后补录。
+本阶段提交：`5a89e82`（移除 dialog 并重试 queued）、`62c0694`（澄清静默状态查询描述）、`f25d3a2`（build number 3）。设计记录提交 `fc6c33f`，实施计划提交 `d582307`。构建产物已在第 9.27 节记录。
+
+### 9.27 build 3 GitHub 构建与 IPA 核验（2026-11-25）
+
+本地提交 `9f28829174af7a4d4a14eca426e81157530ba6e9` 推送到私有仓库 `lu1ul/HealthMi-private` 的 `main`；未推送到原始 `origin`。GitHub Actions run [`45579734642`](https://github.com/lu1ul/HealthMi-private/actions/runs/45579734642) 以 Xcode `16.4`（build `16F6`）成功完成，构建、unsigned 打包、TrollStore entitlement 注入和产物上传步骤全部通过。
+
+两个 artifact 均通过 `gh run download` 下载至本地忽略目录 `build/shortcut-build-3-45579734642/`，没有使用浏览器：
+
+| 产物 | 本地路径 | 大小 | SHA-256 |
+|---|---|---:|---|
+| TrollStore HealthKit IPA | `build/shortcut-build-3-45579734642/HealthMi-trollstore-healthkit-ipa/HealthMi-trollstore-healthkit.ipa` | 2,103,722 字节 | `C8A4866501FEE41FEF89E46DD1404E033A8C79FAF6C8179B8CB77D96EAFF23C4` |
+| Unsigned IPA | `build/shortcut-build-3-45579734642/HealthMi-unsigned-ipa/HealthMi-unsigned.ipa` | 2,043,513 字节 | `8EF2632BD6B22140A1A4CCBCB60DE8A827B8102DC7D70A4E370F3852BF2D15AF` |
+
+对两个 ZIP/IPA 的本地检查结果一致：压缩包完整性测试通过；`CFBundleIdentifier=com.healthmi.HealthMi`、`CFBundleShortVersionString=1.1.0`、`CFBundleVersion=3`、`MinimumOSVersion=16.0`；`Payload/HealthMi.app/Metadata.appintents/root.ssu.yaml` 存在，并包含 `SyncHealthDataIntent` 与 `QueryLatestSyncStatusIntent` 两个动作标识。
+
+TrollStore artifact 附带的 `entitlement-report.txt` 是工作流对打包后可执行文件执行 `ldid -e` 并复核后的报告：`LC_CODE_SIGNATURE` 存在；`com.apple.developer.healthkit=true`；`application-identifier=TROLLTROLL.*`；team identifier 为 `TROLLTROLL`；`get-task-allow=true`；Keychain access groups 为 `TROLLTROLL.*` 和 `com.apple.token`；HealthKit share/update usage descriptions 存在；没有 `embedded.mobileprovision`。该 IPA 的主程序 SHA-256 为 `0B95F28904B9B0FA4AF2B7EE1F9EC247ADCEE1DDD345CE2C110FD5D0C82C3FDC`。
+
+源码静态扫描确认两个快捷指令 Intent 不再包含 `ProvidesDialog`、`IntentDialog` 或 `.result(dialog:)`；CI 已证明修改后的源码可由 Xcode 16.4 编译，IPA metadata 中仍有两个快捷指令动作。该构建记录最初编写时尚未收到 build 3 真机日志；后续首轮复测见第 9.28 节：同步 Intent 已无崩溃地入队并成功提交 BGTask request，但 handler 实际启动、查询动作发现和 FBS Code 5 仍未完全验收。
+
+### 9.28 build 3 iOS 16.3 首轮真机快捷指令复测（2026-11-25）
+
+用户提供 HealthMi 应用内诊断日志，设备为 iOS `16.3 (20D47)`，进程 PID `83334`，版本 `1.1.0 (3)`。日志时间为 UTC；用户在同步历史看到的 `Nov 25, 2026 at 17:04` 与 UTC `09:04` 的本地时区显示相符。运行 ID 为 `A52E4AA5-0E8C-4414-868D-6B5FAA0DF6EC`，短 ID `A52E4AA5` 一致。
+
+#### 本次调用时间线
+
+1. `09:03:38Z`：build 3 启动；日志记录 App Shortcuts 刷新请求、BGTask handler 注册成功，随后 Keychain/Core Data 准备成功。`app.database.prepare.completed` 的 `hasQueuedRun=false` 发生在快捷指令创建本次任务之前，不能用来判断本次调度失败。
+2. `09:03:47Z`：用户点击 HealthMi 页面里的快捷指令入口，记录 `shortcut.discovery.link.tapped`；`09:03:48Z` App 进入 background。这符合入口把用户带离 HealthMi 去系统快捷指令页面的表现。
+3. `09:04:00Z`：`SyncHealthDataIntent.perform()` 开始并创建 `A52E4AA5-0E8C-4414-868D-6B5FAA0DF6EC`，状态 `queued`、触发方式 `shortcut`。
+4. 同一秒中，`background.schedule.started` 记录 `immediate=true`、`earliestDelaySeconds=1`；`background.schedule.completed` 成功；`shortcut.sync.run.queue_result` 记录 `scheduledImmediately=true`；Intent 经过 `perform.queued`、`result_prepared`、`returning` 并正常返回。该路径没有 `shortcut.sync.perform.failed`。
+5. `09:04:04Z` App 场景转为 active，`09:04:16Z` 仪表盘的 HealthKit 摘要/趋势查询完成。截取内容没有 `background.handler.started`、`background.run.claimed`、`sync.run.started` 或该运行 ID 的终态事件。
+
+#### 对“已排队”的判断
+
+这次快捷指令调用**在 Intent 这一层成功**：它持久化了运行记录、系统接受了后台调度请求，且没有复现此前 `ProvidesDialog` fatal/SIGTRAP。由于当前产品设计是“快速入队后无对话框返回”，所以 Intent 返回时同步记录为“已排队”是预期状态。
+
+这并不代表同步数据已经拉取或写入 Apple 健康。`BGAppRefreshTaskRequest.earliestBeginDate` 只限制系统不得早于指定时间启动；Apple 不保证在该时刻启动。当前日志未见 handler 领取该 run，因此本次只能判定为“排队与调度请求成功，后台执行/同步结果未证实”。若之后仍保持 queued，需要继续观察运行记录、通知及诊断日志；真正完成应看到 `running` 后进入 `succeeded`、`partialFailure` 或 `failed`。Apple 官方对 `earliestBeginDate` 的说明见参考资料。
+
+日志另外出现 `healthkit.statistics.query.failed`，类型为 `HKQuantityTypeIdentifierHeartRateVariabilitySDNN`，错误 `com.apple.healthkit/11`，但其 `run=-`，并与仪表盘的汇总/趋势查询事件相邻；这不是本次快捷指令运行记录中的同步失败。若 HRV 指标缺失，应作为独立的 HealthKit 读取问题调查。
+
+#### 三种入口/动作的区别
+
+| 名称 | 实际类型 | 当前行为 | 是否应出现在“添加操作 → App → HealthMi” |
+|---|---|---|---|
+| 仪表盘“快捷指令”入口 | SwiftUI `ShortcutsLink` 按钮 | 打开系统快捷指令里的 HealthMi App Shortcuts 页面，并记录用户点击 | 否；它是应用内导航按钮，不是 App Intent 动作 |
+| “同步健康数据” | `SyncHealthDataIntent` | 快速创建/复用同步运行、提交后台刷新请求、无对话框返回 | 是；本次已实际运行 |
+| “查询同步状态” | `QueryLatestSyncStatusIntent` | 读取最近运行记录并写入诊断日志，然后无对话框返回 | 按源码和 IPA metadata 应可发现；iOS 16.3 设备实际未显示，属于未解决的快捷指令发现/索引问题 |
+
+Apple 将 `ShortcutsLink` 定义为把用户带到当前 App 在快捷指令 App 中的 App Shortcuts 页面；`AppShortcutsProvider` 则声明 App 提供的预配置快捷指令。设备日志中的 `shortcut.discovery.link.tapped` 后接 HealthMi 进入 background，支持入口发生了页面切换，但不表示它本身是可加入流程的动作。
+
+需要明确当前“查询同步状态”的功能边界：`perform()` 虽会读取最新状态，但返回值是无内容的 `.result()`，不会向快捷指令显示状态文本，也不能供后续动作直接使用。它的详细内容目前仍需在 HealthMi 同步历史/日志页面查看。这是 build 3 为避开 iOS 16.3 dialog 返回崩溃而接受的行为限制。后续如果要让快捷指令真正展示查询结果，应单独评估一个更兼容的值返回方案并做 iOS 16.3 设备验证。
+
+#### FBS Code 5 与本次应用日志的关系
+
+用户同时再次报告 `FBSOpenApplication ServiceErrorDomain Code=5`，内容指向打开 `com.healthmi.HealthMi` 失败。但本次附件是 HealthMi 自身的结构化诊断日志，没有包含该 FBS/XPC 系统日志条目，也没有记录当前 PID 在快捷指令返回后崩溃；同一 PID 之后仍记录了场景状态和 HealthKit 查询。因此不能把这条 Code 5 与本次 `A52E4AA5` 排队成功调用认定为同一次失败链，也不能据此说它已根除。
+
+此外，仪表盘 `ShortcutsLink` 的目的地是快捷指令 App，而 FBS 错误报告的目标 bundle 是 HealthMi。仅凭错误文本不足以把它归因于 `ShortcutsLink`。需要用 `pymobiledevice3` 导出的系统日志，按 Code 5 的准确时间关联同一 PID、Shortcut runner/App Intents 错误及具体用户动作；当前应用日志只证明快捷指令入口被点击、随后 App 转入后台。
+
+#### 当前结论与下一步证据
+
+- 已确认：build 3 的“同步健康数据”Intent 可在 iOS 16.3 上完成入队、成功提交立即 BGTask request 并正常返回；这次截取没有旧的 `ProvidesDialog` 返回契约 fatal。
+- 未确认：BGTask 是否被系统启动、运行 `A52E4AA5` 是否最终成功/失败；快捷指令列表为何没有显示 `查询同步状态`；用户报告的 FBS Code 5 与哪个具体动作相关。
+- 排查 FBS 时应保留完整系统日志时间窗口及进程信息；排查动作发现时应记录 `ShortcutsLink` 打开的页面实际列项，并从“添加操作”分别搜索精确标题。现有包级检查只证明 IPA 内有两个 Intent metadata，不能证明 iOS 16.3 Shortcuts runtime 已将两个动作都索引并展示。
+
+### 9.29 build 3 系统日志与应用日志关联：Code 5 属于发现阶段（2026-11-25）
+
+用户补充完整 `D:\debug\shortcut-debug-4.jsonl` 系统日志和同一时段的 HealthMi 应用内日志。本节用系统时间（设备本地时间）将前两步操作分开关联。系统日志行号用于回查原文件；原始设备日志不复制到仓库。
+
+#### 操作一：从 HealthMi 打开快捷指令页面
+
+1. `17:17:16.398`，HealthMi PID `83386` 记录 `shortcut.discovery.link.tapped`。
+2. `17:17:16.452`，系统向 `com.apple.shortcuts` 发送打开请求；`17:17:16.573` 返回成功。故 HealthMi 中的 `ShortcutsLink` **本身成功打开了快捷指令 App**。
+3. `17:17:18.520`，Shortcuts PID `82866` 记录 `Fetching action for bundleIdentifier` 与 `appintents:retrieve action for phrase`。约 9 毫秒后，`linkd` PID `81487` 为 `com.healthmi.HealthMi` 建立 `LNEmbeddedApplicationConnection`，选项为 `suspended: YES, sceneless: YES`，并尝试打开 HealthMi。
+4. `17:17:18.535`，这次嵌入式 App Intents 连接打开失败，错误为 `FBSOpenApplicationServiceErrorDomain Code=5 (InvalidResponse)`，底层 `BSServiceConnectionErrorDomain Code=3` / XPC reply handler error。Shortcuts PID `82866` 随即记录 `Unable to run Auto Shortcut`。主要证据位于系统日志 114158–114269 行。
+
+这组事件发生在同步 Intent 被手动运行之前，最准确的归类是：**Shortcuts 在从应用入口打开页面后，读取/解析 HealthMi 的 App Intent action 或 phrase 时，LinkServices 的嵌入式连接失败。**它与前一节的用户报告及“查询动作未显示”方向一致；不过系统把 bundle identifier、phrase 和部分 action 信息标为 `<private>`，所以不能证明失败的恰好是 `QueryLatestSyncStatusIntent`，也不能仅凭该日志确定是 iOS 16.3 的系统问题还是 app discovery 集成问题。
+
+应避免把此 Code 5 解释成 HealthMi 进程崩溃：该时间段没有 `ProvidesDialog` fatal 或 `SIGTRAP`，PID `83386` 仍在运行。更重要的是，同一份日志后续以另一条 Shortcut Runner 连接成功打开 HealthMi。
+
+#### 操作二：运行“同步健康数据”
+
+1. `17:17:29.566`，BackgroundShortcutRunner PID `83392` 对 `com.healthmi.HealthMi` 发起打开；`17:17:29.583` 系统返回有效 HealthMi 进程句柄 PID `83386`，打开及 `UILinkConnectionAction` 都成功。
+2. `17:17:29.592`，BackgroundShortcutRunner 开始执行 `SyncHealthDataIntent`，operation ID 为 `336BF54C-48A6-46A8-A2B4-E271E54E2B06`。同一时刻的应用日志显示 invocation ID `E27E9AD7-9655-4BB9-BA04-02E65C59D40C`，复用活动运行 `A52E4AA5-0E8C-4414-868D-6B5FAA0DF6EC`；运行仍为 `queued`、排队年龄 `808` 秒，没有新建重复 run。代码再次提交立即 BGTask 请求，`background.schedule.completed` 成功，并记录 `queued_reschedule_attempted`、`scheduledImmediately=true`。
+3. HealthMi 于约 6 毫秒后准备并返回 `.result()`。Shortcuts 记录 action `SyncHealthDataIntent` `completed=1`、输出 `0 items`；BackgroundShortcutRunner 的 operation 以 `finished successfully` 结束，`RunActionFinish` 与 `RunShortcutFinish` 均记录 `completed=1`，workflow 控制器明确记录 `success: yes`（约 `17:17:29.637–29.665`）。因此，这一次快捷指令动作在系统层**确实执行成功并正常返回**。
+4. 输出 `0 items` 是当前 `.result()` 无值/无对话框设计的预期结果。日志中 `17:17:29.675` 的 DEBUG 事件只是读取本地化字符串 “There was a problem running the shortcut.”，不是 Shortcuts 报告本次失败；同一时间附近的 workflow 结果明确为成功。
+
+所以两个现象是不同操作：17:17:18 的 FBS Code 5 出现在动作/短语检索与 Auto Shortcut 阶段；17:17:29 的同步动作打开和运行成功。该设备日志没有复现 build 2 的 `ProvidesDialog` fatal/SIGTRAP。
+
+#### 快速排队与实际同步仍是两件事
+
+第二次调用的 `queuedAtEpochSeconds=1795597440`、`queueAgeSeconds=808` 与 17:04 首次排队的运行吻合。它只重提了 BGTask request，没有创建新的同步；系统虽接受 request，但截至该日志仍没有 `background.handler.started`、`background.run.claimed` 或运行 `A52E4AA5` 的终态日志。快捷指令 workflow 成功表示“把请求放进队列并正常返回”，不表示小米云端数据已经同步到健康 App。
+
+`linkd` 在 `17:17:48.531` 另记 `LNConnectionErrorDomain Code=1002 RequestTimeout`，距前述 action/phrase discovery 连接开始约 30 秒，晚于同步 operation 成功结束约 19 秒。系统日志没有暴露该错误对应的 connection identifier；按时间与进程 `linkd` 判断，它更可能是前一个 discovery/embedded connection 的超时清理，不能完全排除其他连接来源，但没有证据把它归到已成功完成的同步 operation。
+
+#### 修复方向与结论边界
+
+- `SyncHealthDataIntent` 的 `.result()` 与 BackgroundShortcutRunner 在 iOS 16.3 上配合正常；不要因入口发现阶段的 FBS Code 5 回退到长时间同步或恢复 dialog 返回。
+- 当前需要单独排查 `ShortcutsLink` 打开 HealthMi App Shortcuts 页面后的 action/phrase retrieval 连接失败，以及查询动作为何未显示。优先验证同一个 build 3 安装下，直接在“添加操作”中搜索同步/查询两个 App Intent 与从 `ShortcutsLink` 打开 App Shortcuts 页的差异；后续代码变更应针对 discovery/entry 连接层设计。
+- 后台同步仍没有真机启动证据；第二次运行在 `808` 秒后只成功重调度旧队列。Apple 对 `BGTaskRequest.earliestBeginDate` 的定义是“不能早于指定时间启动”，不保证在指定时间启动；其开发说明也指出系统调度延迟可能达到数小时。因此不能仅以 808 秒等待断定 scheduler 实现错误，但需要改进产品反馈/手动恢复路径，避免用户把 shortcut success 当成数据同步完成。
+- 当前“查询同步状态”Intent 仍只读状态后返回空结果，Shortcuts 不会显示查询文本；即便解决可见性，后续仍需单独设计其返回值。
+
+Apple 官方资料：`ShortcutsLink` 用于打开当前 App 在 Shortcuts 中的 App Shortcuts 页面；`AppShortcut` 是基于 App Intent 的预配置快捷指令；`BGTaskRequest.earliestBeginDate` 不保证到点启动任务。见 [Apple ShortcutsLink](https://developer.apple.com/documentation/appintents/shortcutslink)、[Apple AppShortcut](https://developer.apple.com/documentation/appintents/appshortcut)、[Apple BGTaskRequest.earliestBeginDate](https://developer.apple.com/documentation/backgroundtasks/bgtaskrequest/earliestbegindate) 和 [Apple 后台任务调试说明](https://developer.apple.com/documentation/backgroundtasks/starting-and-terminating-tasks-during-development)。
+
+#### 官方参考资料
+
+- Apple [`ShortcutsLink`](https://developer.apple.com/documentation/appintents/shortcutslink)：将用户带到当前 App 在快捷指令 App 中的 App Shortcuts 页面。
+- Apple [`AppShortcutsProvider`](https://developer.apple.com/documentation/appintents/appshortcutsprovider)：声明 App 提供的预配置快捷指令。
+- Apple [`BGTaskRequest.earliestBeginDate`](https://developer.apple.com/documentation/backgroundtasks/bgtaskrequest/earliestbegindate)：指定的时间是任务最早可以运行的时间，系统不保证在该时间启动。

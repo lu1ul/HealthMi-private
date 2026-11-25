@@ -95,7 +95,7 @@ build 2 源码确实声明 `some IntentResult & ProvidesDialog`，Xcode 16.4 构
 
 ## 2026-11-25 build 3 修复设计：移除对话框返回并重试旧队列
 
-状态：用户已选择并确认兼容性优先路线。源码阶段已本地提交，等待 GitHub Actions 构建、IPA 静态核验和 iOS 16.3 真机复测。
+状态：用户已选择并确认兼容性优先路线。源码已本地提交；GitHub Actions run `45579734642` 成功，两个 IPA 已下载并完成包结构核验。iOS 16.3 系统日志确认同步 action/workflow 正常完成且无 ProvidesDialog fatal；App Shortcuts 发现/Auto Shortcut connection 独立发生 FBS Code 5。后台 handler 启动、查询动作可见性和入口连接问题仍待进一步验证，详见全面审查报告第 9.29 节。
 
 ### 意图与目标
 
@@ -130,4 +130,18 @@ build 2 源码确实声明 `some IntentResult & ProvidesDialog`，Xcode 16.4 构
 - Apple `BGTaskRequest.earliestBeginDate`：https://developer.apple.com/documentation/backgroundtasks/bgtaskrequest/earliestbegindate
 - Apple 后台任务调试说明：https://developer.apple.com/documentation/backgroundtasks/starting-and-terminating-tasks-during-development
 - Apple `BGTaskScheduler.submit(_:)`：https://developer.apple.com/documentation/backgroundtasks/bgtaskscheduler/submit(_:)
+
+### build 3 首轮 iOS 16.3 真机结果（2026-11-25）
+
+设备日志显示 `SyncHealthDataIntent` 为运行 `A52E4AA5-0E8C-4414-868D-6B5FAA0DF6EC` 创建 queued 记录、成功提交立即后台刷新请求并正常返回；该日志截取未出现 `ProvidesDialog` fatal，也未出现该运行的 BGTask handler 启动或完成记录。此结果通过了“Intent 不崩溃并完成快速入队”这一小步，不代表后台同步成功。
+
+用户在快捷指令 App 中仍只看到“同步健康数据”。`ShortcutsLink` 是应用内的系统页面入口，不是另一个 App Intent；“查询同步状态”虽存在于源码和 build 3 metadata，设备动作列表发现问题仍未解决。当前查询 Intent 返回空 `.result()`，不会将状态文字显示给快捷指令。
+
+用户另报 FBS Code 5，但提供的 HealthMi 应用日志不含该系统日志事件；目前不能将其与本次 queued 调用归为同一故障链。详细时间线和下一步证据要求记录在《HealthMi项目代码全面审查报告.md》9.28 节。
+
+### build 3 系统日志关联结果（2026-11-25）
+
+后续收到系统级 `shortcut-debug-4.jsonl` 后，已将两次操作区分：按下 HealthMi `ShortcutsLink` 后，Shortcuts 在获取 HealthMi App Intent action/phrase 时由 `linkd` 发起 sceneless/suspended embedded connection，出现 FBS Code 5 / XPC Code 3 和 `Unable to run Auto Shortcut`；约 11 秒后运行“同步健康数据”时，BackgroundShortcutRunner 成功打开 HealthMi，`SyncHealthDataIntent` operation、action 和 workflow 全部 success。用户 app log 显示同步动作复用既有 queued run `A52E4AA5` 并成功重新提交调度请求，但 BGTask handler 尚无启动证据。
+
+因此 build 3 已通过“同步 Shortcut action 返回契约和 runner execution”验证；尚未通过“App Shortcuts 页面发现/查询动作展示”及“后台实际同步”验证。Code 5 与 discovery 阶段高度相关，系统隐藏了具体 phrase，不能认定它专门对应查询 Intent。完整证据见《HealthMi项目代码全面审查报告.md》9.29 节。
 

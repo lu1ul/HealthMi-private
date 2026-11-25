@@ -93,15 +93,15 @@ if active.status == .queued {
 
 **Files:** No workflow changes are planned; `.github/workflows/build-unsigned-ipa.yml` already builds unsigned and TrollStore HealthKit IPAs when the source or `project.yml` changes.
 
-- [ ] Confirm `gh auth status` is authenticated as `lu1ul` and that the `personal` remote is `https://github.com/lu1ul/HealthMi-private.git`; never push to `origin`.
-- [ ] Push the committed `main` branch only to `personal` to trigger the existing IPA workflow.
-- [ ] Use `gh run list`, `gh run view`, and `gh run watch` to identify and wait for the workflow run; do not use the browser.
-- [ ] Download both artifacts with `gh run download $runId --repo lu1ul/HealthMi-private --dir "build/shortcut-build-3"`; confirm that directory is Git-ignored before downloading.
-- [ ] Inspect each IPA with Python `zipfile` and `plistlib`; verify `CFBundleVersion=3`, `CFBundleShortVersionString=1.1.0`, `MinimumOSVersion=16.0`, and both App Intent definitions. For the TrollStore package also verify HealthKit and Keychain entitlements as in the workflow report.
-- [ ] Calculate SHA-256 for each downloaded IPA and append the run ID, artifact paths, hashes, and checks to the report and compatibility record.
-- [ ] Commit those final evidence records as `docs: record shortcut build 3 IPA verification`.
+- [x] Confirm `gh auth status` is authenticated as `lu1ul` and that the `personal` remote is `https://github.com/lu1ul/HealthMi-private.git`; never push to `origin`.
+- [x] Push the committed `main` branch only to `personal` to trigger the existing IPA workflow.
+- [x] Use `gh run list`, `gh run view`, and `gh run watch` to identify and wait for the workflow run; do not use the browser.
+- [x] Download both artifacts with `gh run download $runId --repo lu1ul/HealthMi-private --dir "build/shortcut-build-3-45579734642"`; confirm that directory is Git-ignored before downloading.
+- [x] Inspect each IPA with Python `zipfile` and `plistlib`; verify `CFBundleVersion=3`, `CFBundleShortVersionString=1.1.0`, `MinimumOSVersion=16.0`, and both App Intent definitions. For the TrollStore package also verify HealthKit and Keychain entitlements as in the workflow report.
+- [x] Calculate SHA-256 for each downloaded IPA and append the run ID, artifact paths, hashes, and checks to the report and compatibility record.
+- [x] Commit those final evidence records as `docs: record shortcut build 3 IPA verification`.
 
 ## Validation boundary
 
-The GitHub action confirms compilation and package structure. It cannot exercise the iOS 16.3 App Intents runtime or cause BGAppRefresh to run on the user's device. Final device acceptance requires installing build 3 through TrollStore, removing/re-adding the shortcut action, then checking that the fatal return-contract error is absent and the queued reschedule events appear in exported logs.
+The GitHub action confirms compilation and package structure. The iOS 16.3 system log confirms the `SyncHealthDataIntent` action and full Shortcut workflow completed successfully without the earlier fatal return-contract error. The app queued/rescheduled run `A52E4AA5-0E8C-4414-868D-6B5FAA0DF6EC`, but the log does not confirm a BGAppRefresh handler start or sync completion. The reported FBS Code 5 is now correlated with the separate App Shortcuts action/phrase discovery connection after `ShortcutsLink`; the manual sync runner later opens HealthMi and completes successfully. Remaining device evidence: a background handler claim and terminal state for the queued run, and visibility/execution of “查询同步状态”. See `HealthMi项目代码全面审查报告.md` section 9.29.
 
