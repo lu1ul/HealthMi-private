@@ -13,6 +13,7 @@
 - **Swift Charts 趋势图**：7 天步数/心率/睡眠/HRV 趋势可视化
 - **每日详情页**：点击趋势图中任一天查看当日全部数据 + 压力记录
 - **同步历史日志**：持久化每次同步的结果（成功/失败/拉取数/新增数），自动裁剪 200 条
+- **诊断日志**：在 App 内查看、搜索和筛选应用/网络/HealthKit/快捷指令日志；一键复制脱敏文本，或导出 JSON 文件分享。日志只保存在本机，不上传
 - **数据导出**：一键导出最近 7 天每日数据为 CSV，通过系统分享面板发送
 - **快捷指令**：通过 Siri 或快捷指令快速排队后台同步，并提供“查询最近同步状态”动作和详细错误通知
 - **压力数据展示**：从小米云端读取 stress key，存入 App 内 Core Data 展示（HealthKit 无对应类型）
@@ -52,6 +53,7 @@ project.yml          XcodeGen 工程定义（改配置后 xcodegen generate 重�
 HealthMi/
   App/               入口、引导、主界面、Keychain 凭据、App 状态
     DataExporter      CSV 数据导出
+    DiagnosticsLogView 诊断日志列表、筛选、复制、详情和分享
     DayDetailView     每日详情页
     SyncHistoryView   同步历史日志
     SyncIntent        App Intents / 快捷指令
@@ -59,7 +61,7 @@ HealthMi/
   MiFitness/         小米云 API 的 Swift 移植（Crypto/Session/API/Models/Parser/Region）
   Health/            HealthKit 授权、幂等写入器、数据映射、读取器
     Sync/              同步引擎、Core Data 存储、旧 SwiftData 迁移、后台任务
-  Support/           Info.plist、HealthKit entitlement、通知管理、统一日志
+  Support/           Info.plist、HealthKit entitlement、通知管理、统一诊断日志
   Resources/         资源（AppIcon 等）
 HealthMiTests/       加密向量 / 解析 / 映射 / 引擎 / 游标 / 区域 单测
 tools/               已验证的 Python 参考实现（mi-fitness-mcp-cn）
@@ -92,9 +94,9 @@ xcodebuild -project HealthMi.xcodeproj -scheme HealthMi \
   DEVELOPMENT_TEAM=<团队ID> -allowProvisioningUpdates build
 ```
 
-### GitHub Actions 无签名 IPA
+### GitHub Actions IPA
 
-向 `main` 推送 App 源码或工程配置后，工作流会在 macOS runner 上生成 `HealthMi-unsigned.ipa`；也可以从 GitHub Actions 手动运行 `Build unsigned IPA`。下载名为 `HealthMi-unsigned-ipa` 的 artifact 即可取得文件。构建不会使用 Apple 证书或 provisioning profile，因此 IPA 不能直接安装；请用自己的开发团队签名，并确保 App ID/profile 启用了 HealthKit。若需使用团队已注册的其他 Bundle Identifier，手动运行时填写 `bundle_identifier`。
+向 `main` 推送 App 源码或工程配置后，工作流会在 macOS runner 上生成 `HealthMi-unsigned.ipa` 和带 HealthKit/TrollStore entitlement 的 `HealthMi-trollstore-healthkit.ipa`。前者需要用自己的开发团队证书和 provisioning profile 签名；后者用于 TrollStore 安装，不是开发者签名 IPA。手动运行时可在 `bundle_identifier` 中填写团队已注册的 Bundle Identifier。两个 artifact 均由 GitHub Actions 上传。
 
 ## 使用
 
@@ -106,7 +108,8 @@ xcodebuild -project HealthMi.xcodeproj -scheme HealthMi \
 6. 日常使用：打开 App 点同步，或运行快捷指令“同步 HealthMi 健康数据”。快捷指令只写本地队列并返回“已排队”和运行 ID；若当前进程已注册后台处理器则立即提交调度，否则由已有周期后台刷新领取。之后可运行“查询最近同步状态”查看成功类型和具体错误；
 7. 在趋势区域查看 7 天图表，点击某天进入每日详情；
 8. 点击导航栏时钟图标查看同步历史日志；
-9. 数据导出区域可导出 CSV。
+9. 在“问题诊断”中查看日志详情、搜索/筛选日志并一键复制当前结果；也可导出完整 JSON 诊断文件并通过系统分享；
+10. 数据导出区域可导出 CSV。
 
 ## 注意事项
 
@@ -119,6 +122,7 @@ xcodebuild -project HealthMi.xcodeproj -scheme HealthMi \
 - **本地数据库**：Core Data 存储同步游标、压力记录和同步历史。升级到本版本的 iOS 17+ 用户会在首次启动时导入旧 SwiftData 数据；迁移完成前原 SwiftData 库保留，迁移失败时应用提供重试入口。
 - **压力数据**：从小米云端读取 stress key，存入 App 内 Core Data 展示（不写入 HealthKit，因其无对应类型）；回填只替换 API 实际查询的时间范围。
 - **API 健壮性**：网络错误自动重试（指数退避 + 抖动，最多 3 次），分页请求间 200ms 间隔避免限流，认证错误（code=70016）不重试。
+- **诊断日志隐私**：本地 JSONL 日志最多 20 MiB、保留 14 天；日志不包含凭据、Cookie、请求/响应正文或健康样本值。复制和 JSON 导出均执行脱敏，分享由用户主动选择目标。
 
 ## 测试说明
 

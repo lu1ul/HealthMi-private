@@ -13,6 +13,7 @@
 - **Keychain `-34018` 已确认是旧 TrollStore entitlement 打包缺口，并已修复。** 新产物同时含 `com.apple.developer.healthkit = true` 与 `keychain-access-groups = [TROLLTROLL.*, com.apple.token]`，真机登录已通过。
 - **iOS 16 最低版本适配的主流程已通过真机验收。** Core Data 存储、HealthKit 写入和 TrollStore 安装路径没有阻止 iOS 16.3 运行。
 - **当前未解决的问题是快捷指令动作运行时返回“无法与帮助程序通信”，随后又出现“因为 App 意外退出”。** 最新 run `45522292408` 的 IPA 已静态确认包含 Intent metadata、HealthKit/TrollStore entitlements；路线二也已把 Intent 主体缩减为运行记录读写、轻量排队和可选 BGTask 提交，但用户仍反馈失败。由此不能再把“完整同步太慢”作为首要解释。项目没有 App Intents extension target，Intent 类型编译在主 App target；`openAppWhenRun = false` 本身不足以证明它运行在独立帮助进程。当前优先排查冷启动时的 BGTask handler 注册时机、排队后立即触发的后台同步、App Intents 宿主/旧动作缓存。没有设备 `.ips` 前，无法把进程退出归因到其中任何一个。详见第 9.18 节。
+- **已增加用于后续定位的本地诊断日志功能源码。** 日志页、复制筛选文本和 JSON 文件导出已加入；本轮又补齐网络、HealthKit、快捷指令、后台任务、Keychain、登录和通知埋点，代码提交 `176c2d0`。该提交尚待 GitHub Actions 编译和 IPA 核验，因此目前只能确认源码，不代表新 IPA 已生成或真机日志采集已经验证。详见第 9.19 节。
 
 ## 一、结论摘要
 
@@ -1458,3 +1459,24 @@ TrollStore IPA SHA-256 为 `885ACBCA4A3E90EB4468D4A5321C4248F5FA23350475412E8B85
 - [Apple：`openAppWhenRun`](https://developer.apple.com/documentation/appintents/appintent/openappwhenrun-223b1)
 - [Apple：`BGTaskScheduler.register`](https://developer.apple.com/documentation/backgroundtasks/bgtaskscheduler/register%28fortaskwithidentifier%3Ausing%3Alaunchhandler%3A%29)
 - [Apple：Background Tasks](https://developer.apple.com/documentation/backgroundtasks/)
+
+### 9.19 新增本地诊断日志、查看、复制和文件导出（2026-11-25）
+
+#### 用户需求
+
+在 IPA 应用中增加成熟的详细日志功能，并保留文件导出；用户补充要求增加一键复制日志文本和单独查看日志的窗口，便于直接粘贴日志内容用于诊断。
+
+#### 当前实现
+
+- 仪表盘“问题诊断”入口打开独立的诊断日志查看页。页面支持按关键词搜索、级别和分类筛选、仅看警告/错误、刷新、清空确认以及进入单条日志详情。
+- “复制筛选日志文本”按钮将当前筛选结果写入系统剪贴板，并显示已复制条数；文本含 UTC 时间、级别、分类、事件名、运行 ID、错误域/码和脱敏元数据。复制最多包含最新 10,000 条，默认无筛选时即复制最新日志。
+- JSON 文件导出仍保留，不受筛选条件影响；文件包含全部保留事件、运行摘要与诊断 manifest，通过系统分享面板交给用户选择目的地。导出文件采用唯一名称并设置本地文件保护。
+- 结构化日志以 JSONL 写入 Application Support 并镜像到 `os.Logger`。滚动上限为每文件 2 MiB、总量 20 MiB、保留 14 天；串行 utility 队列异步写入，App Intent 返回和 BGTask 完成前会等待已排队日志完成。
+- 已加入启动/数据库、Keychain/小米登录、HealthKit 授权与状态、摘要/趋势查询、HealthKit 去重/写入、API HTTP/重试/分页/解析、类型映射与同步、App Intents、BGTask、通知、复制/导出等事件。
+
+#### 隐私与验证边界
+
+- 日志调用不写凭据、Cookie、Authorization、请求/响应正文或健康样本值；元数据键按敏感字段名单过滤，常见键值凭据和 URL 查询参数会被脱敏。`os.Logger` 中详细摘要使用 private 隐私级别。
+- 本地 Windows 环境没有 `swift` / `xcodebuild`，当前已执行 `git diff --check`；未运行 XCTest。源码变更提交为 `176c2d0 feat: instrument diagnostic logging across app flows`。
+- GitHub Actions iOS 16.0 Release 构建、IPA 的 HealthKit/TrollStore entitlement、App Intents metadata、MinimumOSVersion 和 SHA-256 核验尚待完成。构建只证明编译与包结构；快捷指令/后台任务/HealthKit 真机行为还需要 iOS 16.3 TrollStore 设备验证。
+- 设计与用户新增复制/查看要求保存在 `docs/superpowers/specs/2026-11-25-diagnostic-logging-design.md`，README 和 CHANGELOG 已同步描述本地日志查看、复制及导出功能。

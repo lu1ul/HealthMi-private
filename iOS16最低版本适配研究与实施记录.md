@@ -1,6 +1,6 @@
 # HealthMi iOS 16 最低版本适配研究与实施记录
 
-> 本文随每个有结论的实施里程碑更新，记录仓库现状、设计决定、变更与验证结果。仅在本地仓库提交，不推送到远程。
+> 本文随每个有结论的实施里程碑更新，记录仓库现状、设计决定、变更与验证结果。每个阶段先本地提交；为用户要求的 IPA 构建仅推送到个人私有仓库 `lu1ul/HealthMi-private`，不推送到原始仓库。
 
 ## 目标与已确认决定
 
@@ -238,6 +238,24 @@ IPA 已包含 `Metadata.appintents`，因此这不是动作注册失败。旧提
 若新包仍显示“无法与帮助程序通信”或“App 意外退出”，下一步必须收集 iPhone 的 `HealthMi-*.ips` 或 `Shortcuts-*.ips`，重点查看 `Exception Type`、`Termination Reason` 和崩溃线程；静态代码和 IPA 包级分析已经不足以判断下一层原因。
 
 独立解析最终 IPA 的 Mach-O 签名 SuperBlob 后，确认 entitlement blob 中包含上述 HealthKit、TrollStore application/team identifier、`get-task-allow` 与 Keychain access groups。主程序 SHA-256：`7d7171b55d8ed693355d8b3eccc073718d73e4495fb584e01d358d088494d300`。
+
+## 2026-11-25 应用内诊断日志、复制和查看器
+
+### 已完成源码
+
+- 已加入应用内诊断日志页面：仪表盘“问题诊断”入口打开独立日志查看页，支持按关键字搜索、级别/分类筛选、仅看警告和错误、逐条详情查看、刷新和清空确认。
+- 用户要求的一键复制已经实现：按钮将当前筛选结果复制为脱敏纯文本并显示复制条数；复制上限为最近 10,000 条，界面列表显示最近 2,000 条。
+- 文件导出继续保留：导出独立 JSON 诊断包，包含全部保留日志和最近同步摘要，文件名使用 UTC 时间与唯一 ID，通过系统分享面板交给用户选择目标。
+- 埋点覆盖应用启动、存储迁移、Keychain、小米登录、HealthKit 授权状态/摘要/趋势/写入、API 状态/重试/分页、同步过程、快捷指令、后台任务、通知与导出。日志不含凭据、Cookie、请求/响应正文或健康样本值。
+- JSONL 文件日志位于 Application Support，排除备份，使用文件保护；单文件最多 2 MiB，总容量最多 20 MiB，保留 14 天。写入通过串行后台队列执行，App Intent 返回和 BGTask 完成前会 flush。
+- 设计与用户新增的复制/查看要求分别记录于 `docs/superpowers/specs/2026-11-25-diagnostic-logging-design.md` 和此前设计补充提交中。
+
+### 本地验证与限制
+
+- `git diff --check` 已通过；未运行 XCTest。当前 Windows 环境没有 `swift` 或 `xcodebuild`，需要 GitHub Actions Xcode 16.4 Release build 验证 iOS 16 编译。
+- `gh auth status` 确认登录账号为 `lu1ul`。为生成 IPA，当前阶段会按既有授权推送到 `lu1ul/HealthMi-private`，绝不推送到 `ShawnDiego/HealthMi`。
+- 埋点代码本地 commit：`176c2d0 feat: instrument diagnostic logging across app flows`。README、CHANGELOG、审查报告及本文件的实现记录仍待本阶段本地提交。
+- IPA 构建与解包核验尚未完成；当前不能把源码实现等同于已编译 IPA，也不能称功能已在 iPhone 真机运行验证。
 
 ## 2026-11-25 快捷指令仍提示通信失败/应用退出：根因重排
 
