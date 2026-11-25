@@ -1317,3 +1317,14 @@ GitHub Actions run `45520859520` 使用 Xcode 16.4 编译 iOS 16 目标，发现
 2. `AppShortcutsProvider` 的多动作声明使用结果构建器语法，不能手写 `[AppShortcut]` 数组字面量。
 
 两处已修复。该 run 在编译阶段终止，因此没有生成本次新 IPA；下一次 workflow 的成功与否将决定能否进行安装包级验证。
+
+#### iOS 16 远程构建与产物核验
+
+修正后的 GitHub Actions run `45521059911` 成功完成 Xcode 16.4 / iOS 16.0 目标的 Release 编译和 IPA 打包。TrollStore artifact 已通过 `gh` 下载并核验：
+
+- IPA SHA-256：`34BCB4FCD0CD0CA98140E05CE11EF44828A6D658C34C6224B5731BDB3DB44D9A`
+- executable SHA-256：`F6D5157C0C63CF725432771C0979D8662FB06137CF08D966025A9C30FF4C82C5`
+- `LC_CODE_SIGNATURE`、HealthKit entitlement、TrollStore Keychain entitlement 和用途说明均存在
+- `Metadata.appintents/root.ssu.yaml` 已包含 `SyncHealthDataIntent_0` 与 `QueryLatestSyncStatusIntent_1`
+
+这证明源码和 App Intents 元数据进入了可安装 IPA。仍需 iOS 16.3 真机验证系统是否接受快捷指令提交的 BGTask、后台任务何时实际运行、通知正文是否完整，以及查询动作能否读到最终状态。远程编译不能证明 iOS 后台调度时序。

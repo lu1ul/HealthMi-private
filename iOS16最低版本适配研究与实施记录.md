@@ -103,6 +103,17 @@
 - `AppShortcutsProvider.appShortcuts` 在 Xcode 16.4 使用结果构建器，多个快捷方式应依次列出 `AppShortcut` 表达式，不能手写 `[AppShortcut]` 数组字面量；已修正。
 - 修正后需要重新推送并观察下一次 workflow，确认进入 IPA 打包和 entitlement 校验阶段。
 
+### GitHub Actions 成功构建与 IPA 核验
+
+- workflow run：`45521059911`，提交 `e1e4322`，Xcode 16.4，部署目标 iOS 16.0。
+- 构建结果：Swift 6 编译、unsigned IPA 打包、TrollStore HealthKit entitlement 注入和二次校验全部成功。
+- TrollStore IPA：`build/HealthMi-trollstore-shortcut-queue-45521059911/HealthMi-trollstore-healthkit.ipa`。
+- IPA SHA-256：`34BCB4FCD0CD0CA98140E05CE11EF44828A6D658C34C6224B5731BDB3DB44D9A`。
+- 主程序 SHA-256：`F6D5157C0C63CF725432771C0979D8662FB06137CF08D966025A9C30FF4C82C5`。
+- entitlement：存在 `LC_CODE_SIGNATURE`、`com.apple.developer.healthkit=true`、TrollStore `keychain-access-groups` 和 `get-task-allow`；无 `embedded.mobileprovision`，符合 TrollStore 路线。
+- App Intents 元数据：`Payload/HealthMi.app/Metadata.appintents/root.ssu.yaml` 同时包含 `SyncHealthDataIntent_0`（同步健康数据）和 `QueryLatestSyncStatusIntent_1`（查询最近同步状态）。
+- 本地使用 `gh run download` 获取产物，未使用浏览器下载。
+
 ## 官方资料
 
 - [Apple SwiftData 文档](https://developer.apple.com/documentation/swiftdata)
