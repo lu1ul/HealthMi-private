@@ -1521,3 +1521,45 @@ GitHub Actions run `45547761743` 的 Release 编译在 `DiagnosticLogging.swift`
 - 这份日志来自一键复制文本，而不是包含完整运行摘要的 JSON 诊断包；要确认 queued 记录的实际排队时间，可再执行“查询最近同步状态”并保留它的返回文本。要判断结果返回阶段是否崩溃，则仍需同一时间的 `HealthMi-*.ips`、`Shortcuts-*.ips` 或 `AppIntents-*.ips`。
 
 本节是对现有日志与源码的分析记录，尚未修改 App 行为或生成新的 IPA。当前最有把握的结论是快捷指令入口已运行，但同一 queued 同步记录未在日志窗口内进入可见的 BGTask handler 执行；“无法与帮助程序通信”的最终崩溃边界仍需 Intent 终点日志或系统 `.ips` 确认。
+
+### 9.23 iOS 16.3 pymobiledevice3 快捷指令系统日志分析（2026-11-25）
+
+#### 取证范围
+
+用户提供 `D:\debug\shortcut-debug.jsonl`，约 72.6 MB、116,319 条 JSONL 记录，时间字段覆盖 2026-11-25 14:42:48–14:43:40（本地时间字段未带时区）。分析时只筛选 HealthMi、App Intents、BackgroundShortcutRunner、Launch Services 与进程退出相关记录，没有把完整日志或无关的系统记录复制进仓库。
+
+#### 确认的直接崩溃原因
+
+同步快捷指令由 `com.apple.WorkflowKit.BackgroundShortcutRunner` 调用，运行器启动 `com.healthmi.HealthMi` 主 App。进程 `82628` 在 14:42:53.421 记录 `shortcut.sync.perform.started`，14:42:53.423 记录 `shortcut.sync.perform.reused_active_run`。App Intents 在 14:42:53.730 校验动作返回值时报告：
+
+> `perform() returned types not declared in method signature - Did not declare ProvidesDialog but provided one`
+
+同一时间紧接 Swift runtime fatal error，文本仍为返回类型未声明 `ProvidesDialog`；随后快捷指令运行器报告 XPC connection interrupted（1004）及代理连接错误（4099）。再次运行时，HealthMi 进程 `82730` 记录数据库准备及 `coredata.load.completed`，又进入同一 Intent 和活动队列复用分支，并在 14:42:58.185 再次触发完全相同的 `ProvidesDialog` fatal error。RunningBoard/FrontBoard 于 14:42:58.534 记录进程以 `signal(2) code=SIGTRAP(5)` 退出，BackgroundShortcutRunner 最后将 `NSCocoaErrorDomain` 4097 报告为 Shortcut 动作错误。
+
+源码中 `SyncHealthDataIntent.perform()` 与 `QueryLatestSyncStatusIntent.perform()` 都声明 `async throws -> some IntentResult`，但返回 `.result(dialog:)`。这是不匹配的 App Intents 返回契约：调用方获得 `ProvidesDialog` 结果，协议签名却没有声明该能力。当前日志将“无法与帮助程序通信/App 意外退出”的直接原因从此前猜测收窄为这个明确的代码错误；XPC 1004/4097 是进程 fatal error 后的连带故障。数据库不是本次崩溃主因，因为第二轮的 Core Data 加载已经记录成功。两个 Intent 的返回类型都需修正为 `some IntentResult & ProvidesDialog`。
+
+#### 查询动作没有显示：本日志的新线索与限制
+
+- 上一版 IPA 的 `Metadata.appintents/root.ssu.yaml` 包含两个动作及短语：`SyncHealthDataIntent` 和 `QueryLatestSyncStatusIntent`；源码的 `HealthMiShortcuts.appShortcuts` 也有两条 `AppShortcut`。因此不能再说查询动作未编入源码或 App Intents NLU metadata。
+- 本次执行记录的 Shortcuts action identifier 只有 `com.healthmi.HealthMi.SyncHealthDataIntent`，没有查询动作的搜索/添加/执行记录；所以日志能定位执行崩溃，但不能直接判断动作选择器为何没有列出查询动作。
+- BackgroundShortcutRunner 两次记录 `ICAppRegistry ... Failed to load a definition for com.healthmi.HealthMi`，并伴有 Launch Services `-10813`。Apple 将此码定义为 `kLSDataUnavailableErr`，意为所需类型的数据不可用。它是快捷指令发现/注册路径的可疑线索，然而同一轨迹成功读取同步 Intent metadata 并启动该动作，缺少证据证明它只导致 Query 动作隐藏。不能把它误判为本次 fatal error 的原因。
+- 日志另有三条 `Info.plist contained no UIScene configuration dictionary`。它们发生在 Intent 执行期间，后续仍进入 Intent 并成功加载 Core Data；而 fatal error 明确指向返回值契约。当前不把这些 UIKit 记录列为已确认根因。
+- 上一版包内 `root.ssu.yaml` 含查询动作，可证明生成的快捷短语元数据中有它；这不等于已证明 iOS 16.3 Shortcuts UI 成功索引或展示它。
+
+#### 下一版修复与复核
+
+1. 为两个 `perform()` 明确添加 `ProvidesDialog` 返回协议，消除 App Intents 返回值校验触发的 fatal error。
+2. 为每次调用增加 invocation ID 和“结果准备/返回前”事件；活动队列日志写入时间、队龄、触发来源；日志文本复制补上 PID/主线程标志，以便把下一次设备系统日志与应用日志交叉关联。
+3. 系统注册快捷指令时调用 `HealthMiShortcuts.updateAppShortcutParameters()`；统一查询动作标题为“查询同步状态”；在仪表盘放置 `ShortcutsLink`；将 build number 从 1 提升到 2。
+4. 构建后重新检查 IPA 的 `Metadata.appintents`，并在 iOS 16.3 TrollStore 设备上通过应用内快捷指令入口检查查询动作是否可见并分别执行两个动作。
+
+若升级后仍看不到查询动作，需重新抓取打开 Shortcuts 操作列表期间的系统日志，而不能仅凭本次“同步动作运行”片段判断。原始 72.6 MB 日志保留在用户本机 `D:\debug\shortcut-debug.jsonl`，仓库仅保存脱敏后的结论。
+
+官方资料：
+
+- [Apple `ProvidesDialog`](https://developer.apple.com/documentation/appintents/providesdialog)：定义返回对话框结果的 `IntentResult` 协议。
+- [Apple App Shortcuts 注册示例](https://developer.apple.com/documentation/appintents/acceleratingappinteractionswithappintents)：示例在 App 初始化时调用 provider 的 `updateAppShortcutParameters()`。
+- [Apple `ShortcutsLink`](https://developer.apple.com/documentation/appintents/shortcutslink)：打开当前 App 在快捷指令中的 App Shortcuts 页面。
+- [Apple `kLSDataUnavailableErr`](https://developer.apple.com/documentation/coreservices/klsdataunavailableerr)：解释系统日志中的 Launch Services 错误码 `-10813`。
+
+本节基于本次设备日志与对应源码分析，未包含原始个人设备日志。新版本实施、GitHub 构建和 IPA 包级核验状态以后续记录为准。
