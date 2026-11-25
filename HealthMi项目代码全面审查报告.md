@@ -12,7 +12,8 @@
 - **数据同步已在 iOS 16.3 真机确认成功。** 小米账号登录成功，数据可以从小米云端同步并写入 Apple 健康。
 - **Keychain `-34018` 已确认是旧 TrollStore entitlement 打包缺口，并已修复。** 新产物同时含 `com.apple.developer.healthkit = true` 与 `keychain-access-groups = [TROLLTROLL.*, com.apple.token]`，真机登录已通过。
 - **iOS 16 最低版本适配的主流程已通过真机验收。** Core Data 存储、HealthKit 写入和 TrollStore 安装路径没有阻止 iOS 16.3 运行。
-- **快捷指令“无法与帮助程序通信 / App 意外退出”的直接根因已由 iPhone 系统日志确认并修复。** App Intents 校验发现 `perform()` 返回了 dialog，却没有在方法签名中声明 `ProvidesDialog`；随后 Swift runtime fatal error，HealthMi 以 `SIGTRAP(5)` 退出。Shortcuts 的 XPC 1004/4097 是进程退出后的连带错误。两个 Intent 的返回签名已修正，新版 build 2 已由 GitHub Actions 成功构建并核验；仍需用户在 iOS 16.3 + TrollStore 上安装复测。详见第 9.23–9.24 节。
+- **快捷指令崩溃在 build 2 的 iOS 16.3 真机上仍然复现。** 新日志再次出现 `Did not declare ProvidesDialog but provided one`，随后 HealthMi PID `82873` 以 `SIGTRAP(5)` 退出。此前虽将源码返回签名改为 `some IntentResult & ProvidesDialog` 并成功构建，设备运行时仍判定返回契约未声明；因此此前“已修复”的结论不成立。后续要排除设备仍运行旧快捷指令定义/系统元数据的影响，或去掉 dialog 返回路径，用不返回对话框的 Intent 结果验证 iOS 16.3 兼容性。详见第 9.25 节。
+- **同步快捷指令还卡在一个旧的 queued 运行记录。** build 2 日志连续复用运行 ID `3AC440E1`，排队年龄约 6 小时 49 分；代码对 queued 记录采用 24 小时过期阈值，故仍认作活动任务。应用启动时虽然成功提交 BGTask 请求，但没有观察到后台 handler 开始/领取记录。即使修正 Intent 崩溃，该旧队列也可能让用户反复得到“已有任务”而不启动新的同步。详见第 9.25 节。
 - **“查询同步状态”在快捷指令列表中是否出现仍待设备确认。** 本次日志记录的是同步动作执行，没有记录用户打开或搜索动作列表；新版加入启动时刷新 App Shortcuts、统一动作标题和仪表盘快捷指令入口，但这些包级改动不能代替 iOS 16.3 上的实际发现与运行验证。详见第 9.24 节。
 - **诊断日志源码已进入成功构建的 build 2。** 日志页、复制筛选文本和 JSON 文件导出，以及网络、HealthKit、快捷指令、后台任务、Keychain、登录和通知埋点均已实现；新版 IPA 已生成。此前的代码阶段提交 `176c2d0` 不再是“尚待编译”状态。详见第 9.19、9.24 节。
 
@@ -1565,9 +1566,9 @@ GitHub Actions run `45547761743` 的 Release 编译在 `DiagnosticLogging.swift`
 
 本节基于本次设备日志与对应源码分析，未包含原始个人设备日志。新版本实施、GitHub 构建和 IPA 包级核验状态以后续记录为准。
 
-### 9.24 对话框崩溃修复、快捷指令入口和下一版诊断增强（2026-11-25）
+### 9.24 对话框返回签名调整、快捷指令入口和诊断增强（2026-11-25）
 
-根据 9.23 节中 App Intents 的 fatal error 记录，已修正两个 Intent 的返回签名为 `some IntentResult & ProvidesDialog`。此改动直接匹配 `.result(dialog:)` 返回能力，避免 App Intents 对结果类型校验失败。
+根据 9.23 节中 App Intents 的 fatal error 记录，源码中曾将两个 Intent 的返回签名改为 `some IntentResult & ProvidesDialog`，以匹配 `.result(dialog:)` 返回能力。该处理当时只通过了构建和 IPA 检查；后续 9.25 节的 iOS 16.3 设备日志证明 runtime 仍然报同一错误，因此不能视为修复成功。
 
 诊断部分为每次 Intent 生成独立 invocation ID；开始、队列创建/复用、结果准备和即将返回事件会携带该 ID 与耗时。活动队列分支记录排队 epoch、队列年龄、状态与触发来源；BGTask/用户动作使旧运行过期时，在成功保存失败状态后记录旧状态、新状态、年龄和失效阈值。一键复制日志行现在包含 PID 和主线程标志。
 
@@ -1576,3 +1577,38 @@ GitHub Actions run `45547761743` 的 Release 编译在 `DiagnosticLogging.swift`
 实施提交：根因文档 `13f4a2e`；返回类型修复 `9ad9c87`；诊断日志增强 `8846299`；快捷指令入口与 build 2 `41390eb`。GitHub Actions run [`45567273417`](https://github.com/lu1ul/HealthMi-private/actions/runs/45567273417) 已成功，构建源码 SHA 为 `14a61fd636dcb18f13defa3213c606910fe64fa2`。TrollStore IPA 位于 `build/shortcut-return-fix-45567273417/HealthMi-trollstore-healthkit-ipa/HealthMi-trollstore-healthkit.ipa`，SHA-256 为 `21C14D8CBEC6C54A5C5087FC7F5141CBD87BF2291B9F77E3DD9728D85942FD48`，大小 2,103,743 字节；unsigned 对照 IPA 位于 `build/shortcut-return-fix-45567273417/HealthMi-unsigned-ipa/HealthMi-unsigned.ipa`，SHA-256 为 `6982A2ECD0A6B9AB985E8F813F1C14930FA1F949CCC4A838C8AE82A4B84FA9FA`，大小 2,043,478 字节。
 
 IPA 解包复核确认两个包的 Bundle ID 均为 `com.healthmi.HealthMi`、版本 `1.1.0`、build `2`、最低系统版本 `16.0`；App Intents metadata 包含同步和查询动作，查询标题为“查询同步状态”。TrollStore 包还包含 HealthKit entitlement、TrollStore 标识和 Keychain access groups，且不含 provisioning profile。**以上是构建和包级验证，不是新版本已在真机运行的证据**；iOS 16.3 TrollStore 安装、同步 Intent 不再崩溃、查询动作是否显示及其可执行性仍待用户复测。
+
+### 9.25 build 2 真机复测：返回契约错误仍存在（2026-11-25）
+
+用户提供 `D:\debug\shortcut-debug-3.jsonl`（约 164 MB）和 App 内复制的诊断文本。诊断文本确认运行版本为 `1.1.0 (2)`、iOS `16.3 (20D47)`。App 内日志时间戳为 UTC；系统日志时间与设备本地时间相符。两份日志以 HealthMi PID `82873` 关联。
+
+#### 崩溃时间线
+
+1. App 内日志在 `2026-11-25T07:44:20Z` 记录 PID `82873` 的 Core Data 加载成功、Keychain 凭据读取成功、HealthKit 可用；启动时提交的后台刷新请求也返回成功。
+2. 系统日志 `2026-11-25 15:45:49.555`（设备本地时间）记录 `BackgroundShortcutRunner` 请求打开 `com.healthmi.HealthMi`。
+3. 同一 HealthMi PID `82873` 在 `15:45:49.635` 再次报错：`perform() returned types not declared in method signature — Did not declare ProvidesDialog but provided one`。Swift runtime 紧接着触发 fatal error；SpringBoard 在 `15:45:49.745` 记录进程以 `SIGTRAP(5)` 退出。
+4. 约 6.75 秒后，系统进程 `linkd` 于 `15:45:56.497` 收到 `FBSOpenApplicationServiceErrorDomain Code=5 (InvalidResponse)`，底层为 `BSServiceConnectionErrorDomain Code=3` / XPC reply handler error；Shortcuts 同时记录 `Unable to run Auto Shortcut`。该错误发生在 HealthMi fatal 退出之后，与同一 App Intents 调用链紧邻，最符合“应用进程先崩溃，系统后续打开/连接请求拿不到有效响应”的连带故障；Code 5 不是最初崩溃的根因。
+
+#### 上一轮为什么不能算修复成功
+
+- Git 源码和 build 2 确实包含 `some IntentResult & ProvidesDialog` 签名；GitHub 构建使用 Xcode 16.4，目标系统版本 16.0。IPA 中也有 App Intents framework 的 `ProvidesDialog` 符号。
+- `Metadata.appintents/root.ssu.yaml` 与 `extract.actionsdata` 的静态检查只能确认快捷指令动作名称、短语和发现信息，没有可直接核对的 `perform()` 返回能力声明。此前仅凭 Intent metadata 存在，就推断返回签名已被设备 runtime 正确识别，验证范围不够。
+- 当前系统日志证明，iOS 16.3 设备执行 build 2 时，App Intents runtime 仍把返回类型认作未声明 `ProvidesDialog`。单凭日志不能区分“设备仍执行旧动作/缓存定义”与“构建或 iOS 16.3 runtime 未正确获得此返回能力”；不能继续把问题归咎于数据库、HealthKit 授权或网络错误。
+- 同一系统日志出现 `ICAppRegistry` 无法加载 HealthMi definition 和 Launch Services `-10813`，但 BackgroundShortcutRunner 随后读取 link metadata 并启动了目标动作。这仍是快捷指令发现/索引的独立线索，不能解释已明确记录的 `ProvidesDialog` fatal error。
+
+#### 同步队列还有独立的卡住问题
+
+App 诊断文本在 `07:43:24Z`、`07:44:04Z`、`07:44:07Z` 记录快捷指令进入 `perform()` 并到达 `shortcut.sync.perform.returning`，因此业务函数执行到了准备返回结果这一步；崩溃发生在后续 App Intents 返回类型校验。三个调用都复用 `run=3AC440E1`，状态为 `queued`，队列年龄约 6 小时 48–49 分钟。`SyncRunStore` 对 queued 记录采用 24 小时 stale 阈值，因此旧记录不会自动失效。
+
+启动日志中的 `background.schedule.completed` 只证明 BGTask request 已成功提交；该文件没有 `background.handler.started` 或 run claimed 事件，不能据此说后台同步已经执行。代码的快捷指令 `reused_active` 分支也不会再次调用立即调度方法。因此同一旧 queued 记录可能阻止新运行，又长期没有被 BGTask 领取。
+
+HealthKit HRV 汇总查询错误 `com.apple.healthkit/11` 没有关联同步 `runID`，其他摘要和趋势查询继续完成；Core Data 和 Keychain 在启动时均成功。它们都不是快捷指令崩溃证据。
+
+#### 建议修复顺序
+
+1. **先消除导致进程退出的返回类型边界。** 为 iOS 16.3 做一个 build 3 兼容性验证：两个 Intent 都不返回 `IntentDialog`，先改为仅返回 `.result()`，同时保持 `openAppWhenRun = false` 和快速排队。错误和同步结果留在同步历史、通知和诊断页。若查询动作还要向后续快捷指令传详细文字，再单独评估 `ReturnsValue<String>` 并在设备验证；不要在同一次修复中再次依赖 `ProvidesDialog`。
+2. **排除旧动作定义缓存。** 删除快捷指令中旧的 HealthMi 动作实例，卸载旧 App 后安装 build 3，再从 HealthMi 的快捷指令入口重新添加动作。新 build 启动日志应带构建源码 SHA 和结果模式，便于确认设备运行的是预期产物。
+3. **修复 stale queue 生命周期。** 将 queued 失效窗口缩短（建议先用 10–15 分钟，再按实际同步等待调整）；快捷指令碰到仍 queued 的活动记录时，重新提交调度请求，或明确将旧记录标记失败后创建新运行。BGTask 提交成功要和 handler 实际启动分开呈现。
+4. **设备验收以系统日志为准。** 先确认没有 `Did not declare ProvidesDialog`、`Fatal error`、`SIGTRAP` 和 `FBSOpenApplicationServiceErrorDomain Code=5`；再用状态查询确认新 run 从 queued 进入 running/terminal 状态。若采用 ReturnsValue，再单独验证 Shortcuts 能拿到并显示详细文本。
+
+本节是日志分析和修复方案记录，没有修改源码或声称已生成 build 3。原始个人设备系统日志没有复制进仓库。

@@ -2,7 +2,7 @@
 
 日期：2026-11-25
 
-状态：代码已实施，私有 GitHub Actions 构建与 IPA 包级核验已成功；等待 iOS 16.3 真机复测。
+状态：代码和 build 2 已交付，但 iOS 16.3 真机复测仍触发同一 `ProvidesDialog` fatal error；需要新的兼容性修复。
 
 ## 背景
 
@@ -68,4 +68,28 @@ GitHub Actions run `45567273417` 已成功，构建源码 SHA 为 `14a61fd636dcb
 - Apple `AppShortcutsProvider` 的系统注册示例：https://developer.apple.com/documentation/appintents/acceleratingappinteractionswithappintents
 - Apple `ShortcutsLink`：https://developer.apple.com/documentation/appintents/shortcutslink
 - Apple `kLSDataUnavailableErr`：https://developer.apple.com/documentation/coreservices/klsdataunavailableerr
+
+## 2026-11-25 build 2 真机复测失败与后续修复方案
+
+用户提供新版设备日志 `D:\debug\shortcut-debug-3.jsonl` 和 App 内诊断文本。App 日志确认安装版本为 `1.1.0 (2)` / iOS 16.3 (20D47)。系统日志再次记录同一直接错误：
+
+```text
+2026-11-25 15:45:49.635  HealthMi pid=82873
+Did not declare ProvidesDialog but provided one
+Fatal error: perform() returned types not declared in method signature
+2026-11-25 15:45:49.745  Process exited with SIGTRAP(5)
+```
+
+约 6.75 秒后 `linkd` 记录 `FBSOpenApplicationServiceErrorDomain Code=5 (InvalidResponse)`，底层 `BSServiceConnectionErrorDomain Code=3`，Shortcuts 报 `Unable to run Auto Shortcut`。这些记录在 fatal 和进程退出之后，当前应视为打开/连接目标应用失败的下游错误；不能把它们当作另一项独立的最初根因。
+
+build 2 源码确实声明 `some IntentResult & ProvidesDialog`，Xcode 16.4 构建通过；但设备 runtime 仍否定此返回契约。先前包检查验证了动作名称与 App Intents metadata 文件存在，却没有直接验证设备解析到的 `perform()` result capability。当前尚无法仅靠这份日志区分 iOS 16.3/TrollStore 路径上的旧动作/元数据缓存和构建/运行时结果能力解析问题，因此不能把前一版修复标为成功。
+
+另一个独立故障是旧队列：诊断文本中多次复用运行 `3AC440E1`，queued 年龄约 6 小时 49 分。代码用 24 小时判定 queued 记录过期；App 启动提交 BGTask 成功，但日志没观察到 handler 领取。`reused_active` 快捷指令分支不再提交立即调度，可能令失效队列长期阻挡新同步。
+
+### 建议的下一轮实施顺序
+
+1. 两个 Intent 先移除 `.result(dialog:)` 和 `ProvidesDialog`，仅返回 `.result()` 做 iOS 16.3 兼容性验证，保留静默快速排队。详细错误先通过 App 的同步历史、诊断页和通知查看；如需快捷指令后续动作消费状态文本，再单独评估 `ReturnsValue<String>`。
+2. build number 提升到 3，日志加上源码 commit fingerprint 和返回模式标记；卸载旧版、移除并重建快捷指令动作，再安装 build 3，避免无法辨认运行包与旧动作定义。
+3. 将 queued stale 时间调到 10–15 分钟初值；复用活动 queued 时重提 BGTask 或结束旧队列并创建新 run。把“请求提交成功”和“后台处理器实际启动”分成两个状态。
+4. 真机验收先确认没有 ProvidesDialog fatal、SIGTRAP、FBS Code 5；再确认新 run 能从 queued 进入 running/完成状态。若采用 ReturnsValue，再单独验证结果在 Shortcuts 中的可见性。
 

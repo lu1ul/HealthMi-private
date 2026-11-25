@@ -316,4 +316,20 @@ Apple 官方来源：
 
 GitHub Actions run `45567273417` 已成功，构建源码 SHA 为 `14a61fd636dcb18f13defa3213c606910fe64fa2`。TrollStore IPA：`build/shortcut-return-fix-45567273417/HealthMi-trollstore-healthkit-ipa/HealthMi-trollstore-healthkit.ipa`，SHA-256 `21C14D8CBEC6C54A5C5087FC7F5141CBD87BF2291B9F77E3DD9728D85942FD48`；unsigned 对照 IPA：`build/shortcut-return-fix-45567273417/HealthMi-unsigned-ipa/HealthMi-unsigned.ipa`，SHA-256 `6982A2ECD0A6B9AB985E8F813F1C14930FA1F949CCC4A838C8AE82A4B84FA9FA`。两个包均静态核验为 build 2、最低系统版本 16.0，并含同步和查询 Intent metadata。TrollStore 包的 HealthKit entitlement、TrollStore 标识和 Keychain access groups 也已核验。
 
-包级构建验证已经完成；iOS 16.3 TrollStore 真机安装后是否消除崩溃、查询动作是否出现在系统列表并可执行，仍需用户复测。设备日志没有记录快捷指令动作列表的浏览或搜索，因此“查询动作此前未显示”的根因仍未确定。
+包级构建验证已经完成，但之后的 iOS 16.3 TrollStore 复测失败：build 2 系统日志再次报告 `Did not declare ProvidesDialog but provided one`，HealthMi 以 `SIGTRAP(5)` 退出。详见下方新日志分析；不能把返回类型修正视为已在真机修复。
+
+## 2026-11-25 build 2 新设备日志分析：返回契约仍崩溃
+
+用户提供 `D:\debug\shortcut-debug-3.jsonl`（约 164 MB）以及 App 内日志文本。设备侧确认运行版本 `1.1.0 (2)`、iOS 16.3 (20D47)。App 内日志为 UTC，系统日志时间按设备本地时钟显示。系统 JSONL 第 78055–78056 行在 `15:45:49.635` 记录 App Intents 返回类型错误与 fatal error；第 82173、82194 行在 `15:45:49.745` 记录 PID `82873` 以 `SIGTRAP(5)` 退出。第 159364–159380 行在 `15:45:56.497–.498` 由 `linkd` 和 Shortcuts 记录 FBS open Code 5 / XPC Code 3 / Unable to run Auto Shortcut。
+
+时间顺序表明 Code 5 是 HealthMi fatal 退出之后的打开/连接响应失败；首先要处理的仍是 `ProvidesDialog` runtime 契约错误，而不是单独修 FBS 或 XPC。
+
+虽然源码签名已改为 `some IntentResult & ProvidesDialog`，build 2 使用 Xcode 16.4 并通过 Actions 构建，IPA 含 App Intents metadata 和相关框架符号，真机仍然认定 perform 未声明 `ProvidesDialog`。`root.ssu.yaml` / `extract.actionsdata` 的包检查不包含可直接确认 perform 返回能力的字段；此前包级检查不足以证明设备 runtime 正确识别返回签名。原因仍待区分：设备上的旧动作/定义缓存，或当前构建与 iOS 16.3 App Intents runtime 对返回能力的处理不一致。
+
+同一 App 日志还揭示一个独立队列问题：多个调用都复用 `run=3AC440E1`、状态 `queued`，队列年龄约 24,521–24,564 秒（约 6 小时 48 分–6 小时 49 分）。代码对 queued 记录采用 24 小时 stale 阈值。启动时虽然成功提交 BGTask request，但日志没有 handler 启动或 run claimed 事件；复用活动队列的快捷指令分支也不重新提交立即调度。建议将 queued 失效时限缩短到 10–15 分钟初值，并在复用旧 queued 记录时重新调度或先结束旧记录再创建新任务。
+
+下一版建议先做无对话框返回的最小兼容验证：两个 Intent 返回 `.result()`，不再提供 `ProvidesDialog`，保持静默快速排队；详细结果先通过同步历史、诊断日志和通知读取。若查询动作需要向快捷指令后续步骤输出文本，可另行评估 `ReturnsValue<String>` 并做真机验证。重新打包后删除旧快捷指令动作，干净重装新 build，并通过系统日志确认不再出现 ProvidesDialog fatal / SIGTRAP；随后单独验收队列能否从 queued 前进。
+
+日志中的 Core Data load、Keychain 凭据读取、HealthKit available 和通知授权均成功；HRV 统计 `com.apple.healthkit/11` 没有同步 run ID，与快捷指令进程崩溃无直接关联。BackgroundShortcutRunner 的 `ICAppRegistry` / `-10813` 是动作发现警告，可能与查询动作可见性相关，但本日志不证明它是本次崩溃根因。
+
+本次只更新诊断文档，没有改源码、生成 build 3 或声称已修复。原始设备系统日志没有复制进仓库。
