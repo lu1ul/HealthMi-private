@@ -21,6 +21,23 @@ struct DailyTrend: Identifiable, Sendable {
     var id: Date { date }
 }
 
+private final class HealthKitDailyValuesAccumulator: @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [Date: Double] = [:]
+
+    func set(_ value: Double, for day: Date) {
+        lock.lock()
+        defer { lock.unlock() }
+        values[day] = value
+    }
+
+    func snapshot() -> [Date: Double] {
+        lock.lock()
+        defer { lock.unlock() }
+        return values
+    }
+}
+
 /// 从 HealthKit 读回摘要，让用户在 App 里直接看到已同步的数据。
 enum HealthKitReader {
     /// 最近 7 天（含今天）的摘要。
@@ -131,7 +148,7 @@ enum HealthKitReader {
         )
         let calendar = Calendar.current
         let anchor = calendar.startOfDay(for: start)
-        var result: [Date: Double] = [:]
+        let result = HealthKitDailyValuesAccumulator()
         do {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
                 let predicate = HKQuery.predicateForSamples(withStart: start, end: end)
@@ -155,7 +172,7 @@ enum HealthKitReader {
                             value = stats.averageQuantity()?.doubleValue(for: unit)
                         }
                         let day = calendar.startOfDay(for: stats.startDate)
-                        if let value { result[day] = value }
+                        if let value { result.set(value, for: day) }
                     }
                     continuation.resume()
                 }
@@ -168,7 +185,7 @@ enum HealthKitReader {
                 message: "HealthKit 每日统计查询完成",
                 dataType: sampleType,
                 metadata: [
-                    "dayBucketCount": String(result.count),
+                    "dayBucketCount": String(result.snapshot().count),
                     "durationMs": Self.durationMilliseconds(since: startedAt),
                 ]
             )
@@ -184,7 +201,7 @@ enum HealthKitReader {
             )
             throw error
         }
-        return result
+        return result.snapshot()
     }
 
     /// 睡眠按天聚合（查询原始样本手动按天分桶）。

@@ -241,6 +241,14 @@ private enum DiagnosticRedactor {
     }
 }
 
+private enum DiagnosticLogFileAttributes {
+    static func excludeFromBackup(_ url: URL) {
+        var resourceValues = URLResourceValues()
+        resourceValues.isExcludedFromBackup = true
+        try? url.setResourceValues(resourceValues)
+    }
+}
+
 final class DiagnosticLogStore: @unchecked Sendable {
     static let shared = DiagnosticLogStore()
 
@@ -374,7 +382,7 @@ final class DiagnosticLogStore: @unchecked Sendable {
             withIntermediateDirectories: true,
             attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication]
         )
-        try? directoryURL.setResourceValue(true, forKey: .isExcludedFromBackupKey)
+        DiagnosticLogFileAttributes.excludeFromBackup(directoryURL)
     }
 
     private func createCurrentFile() throws {
@@ -386,7 +394,7 @@ final class DiagnosticLogStore: @unchecked Sendable {
         guard created || fileManager.fileExists(atPath: currentFileURL.path) else {
             throw CocoaError(.fileWriteUnknown)
         }
-        try? currentFileURL.setResourceValue(true, forKey: .isExcludedFromBackupKey)
+        DiagnosticLogFileAttributes.excludeFromBackup(currentFileURL)
     }
 
     private func write(_ data: Data, to url: URL) throws {
@@ -580,7 +588,7 @@ enum DiagnosticLogExporter {
             [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
             ofItemAtPath: url.path
         )
-        try? url.setResourceValue(true, forKey: .isExcludedFromBackupKey)
+        DiagnosticLogFileAttributes.excludeFromBackup(url)
         return (url, snapshot.events.count, data.count)
     }
 
