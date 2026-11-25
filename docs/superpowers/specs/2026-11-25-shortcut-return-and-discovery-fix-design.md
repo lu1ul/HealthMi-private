@@ -93,3 +93,41 @@ build 2 源码确实声明 `some IntentResult & ProvidesDialog`，Xcode 16.4 构
 3. 将 queued stale 时间调到 10–15 分钟初值；复用活动 queued 时重提 BGTask 或结束旧队列并创建新 run。把“请求提交成功”和“后台处理器实际启动”分成两个状态。
 4. 真机验收先确认没有 ProvidesDialog fatal、SIGTRAP、FBS Code 5；再确认新 run 能从 queued 进入 running/完成状态。若采用 ReturnsValue，再单独验证结果在 Shortcuts 中的可见性。
 
+## 2026-11-25 build 3 修复设计：移除对话框返回并重试旧队列
+
+状态：用户已选择兼容性优先路线；本节设计待用户确认，确认前不修改产品源码。
+
+### 意图与目标
+
+修复 iOS 16.3 + TrollStore 上运行“同步健康数据”快捷指令时，HealthMi 在 App Intents 返回校验中触发 fatal error、随后以 `SIGTRAP(5)` 退出的问题；同时让重复运行快捷指令时复用的旧 `queued` 任务重新获得一次后台调度机会。
+
+### 采用方案与取舍
+
+1. **采用：无对话框的完成结果。** `SyncHealthDataIntent` 与 `QueryLatestSyncStatusIntent` 的 `perform()` 返回 `some IntentResult`，成功和错误分支均返回 `.result()`；移除 `.result(dialog:)`、`IntentDialog` 和 `ProvidesDialog`。同步仍是快速排队、静默执行。Shortcuts 本身不再显示状态文字；详细状态继续从 App 内同步历史、通知和诊断日志读取。这样避免继续调用 iOS 16.3 设备已明确拒绝的 dialog 返回能力。
+2. **未采用：`ReturnsValue<String>`。** Apple 提供该方式向调用方返回值，但用户选择本轮优先验证最小的无内容 `.result()` 返回；状态值传递留作后续独立改动，避免把新的返回能力也纳入当前兼容性验证。
+3. **未采用：继续保留 dialog 并只清理 Shortcuts 缓存。** build 2 已通过更新的签名、动作发现元数据和快捷指令刷新入口，但 iOS 16.3 仍复现相同 fatal；仅清缓存不能消除已观测到的运行时返回契约错误。
+
+### 队列处理
+
+- 若快捷指令发现活动记录为 `queued`，不创建重复运行记录；再次调用 `scheduleFromIntentIfRegistered(immediate: true)`，并记录本次是重试、调度成功、当前进程未注册处理器或调度失败。
+- 若活动记录为 `running`，继续复用现有运行，不重复提交后台请求。
+- 如果重提调度失败，保留 queued 记录并写入完整错误日志；失败不应把之前已经存在的同步运行错误地标为失败。
+- 保留 queued stale 阈值 24 小时。`earliestBeginDate` 仅规定任务不得早于该时刻运行，Apple 不保证按该时刻启动；后台任务实际启动可能延迟数小时。因此不采用 10–15 分钟阈值，避免把系统正常延迟误报为同步失败。超过 24 小时的 queued 记录仍由既有 `markStale` 路径回收，并记录年龄和阈值。
+- BGTask 请求提交成功只表示请求已被接受，不表示同步处理器已经开始；日志和快捷指令状态不得混淆这两件事。
+
+### 范围、约束与验收
+
+- 将 `project.yml` 的 build number 从 2 提升至 3，保持最低系统版本 iOS 16.0 和原 Bundle ID 不变。
+- 修改 `HealthMi/App/SyncIntent.swift` 的两个 Intent 返回路径；在活动 queued 重用分支重试调度。若发现共享队列模型或错误边界必须调整，再更新本节设计并重新确认。
+- 更新 `CHANGELOG.md`、`HealthMi项目代码全面审查报告.md`、`iOS16最低版本适配研究与实施记录.md`，记录设计、变更和构建产物核验。每个实施阶段本地单独提交；构建只推送到用户私有仓库 `lu1ul/HealthMi-private`，不推送到原始仓库。
+- 验收：GitHub Actions 成功构建 iOS IPA；IPA 中版本 build 为 3、最低系统版本为 iOS 16.0，App Intents 元数据仍包含同步与查询动作；TrollStore IPA 的 HealthKit、Keychain entitlement 保持正确；解包和静态扫描确认二进制源码已不含 `ProvidesDialog`/`result(dialog:)` 快捷指令返回路径；生成 SHA-256 并用 `gh` 下载产物。
+- 设备运行时验收仍须在 iOS 16.3 + TrollStore 真机完成：卸载 build 2、移除并重建快捷指令动作后安装 build 3，检查没有 `Did not declare ProvidesDialog`、`SIGTRAP`、FBS Code 5；查看日志确认旧 queued 被重新调度，并在运行过期后明确回收。GitHub 构建和 IPA 静态检查不能代替这项真机验收。
+
+### 官方资料
+
+- Apple `IntentResult.result()`：https://developer.apple.com/documentation/appintents/intentresult/result()
+- Apple `ReturnsValue`：https://developer.apple.com/documentation/appintents/returnsvalue
+- Apple `BGTaskRequest.earliestBeginDate`：https://developer.apple.com/documentation/backgroundtasks/bgtaskrequest/earliestbegindate
+- Apple 后台任务调试说明：https://developer.apple.com/documentation/backgroundtasks/starting-and-terminating-tasks-during-development
+- Apple `BGTaskScheduler.submit(_:)`：https://developer.apple.com/documentation/backgroundtasks/bgtaskscheduler/submit(_:)
+
