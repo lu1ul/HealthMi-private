@@ -32,6 +32,36 @@ enum HealthKitManager {
 
     /// 请求读写授权（系统会展示授权弹窗）。
     static func requestAuthorization() async throws {
-        try await healthStore.requestAuthorization(toShare: typesToShare, read: typesToRead)
+        DiagnosticLogger.record(
+            .info,
+            category: .healthKit,
+            event: "healthkit.authorization.system_request.started",
+            message: "调用 HealthKit 授权请求 API",
+            metadata: [
+                "shareTypeCount": String(typesToShare.count),
+                "readTypeCount": String(typesToRead.count),
+                "shareTypeIdentifiers": typesToShare.map(\.identifier).sorted().joined(separator: ","),
+                "readTypeIdentifiers": typesToRead.map(\.identifier).sorted().joined(separator: ","),
+                "healthDataAvailable": String(isAvailable),
+            ]
+        )
+        do {
+            try await healthStore.requestAuthorization(toShare: typesToShare, read: typesToRead)
+            DiagnosticLogger.record(
+                .info,
+                category: .healthKit,
+                event: "healthkit.authorization.system_request.returned",
+                message: "HealthKit 授权请求 API 已返回"
+            )
+        } catch {
+            DiagnosticLogger.record(
+                .error,
+                category: .healthKit,
+                event: "healthkit.authorization.system_request.failed",
+                message: "HealthKit 授权请求 API 抛出错误",
+                error: error
+            )
+            throw error
+        }
     }
 }

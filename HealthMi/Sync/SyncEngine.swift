@@ -57,8 +57,14 @@ actor SyncEngine {
     ///   - backfillDays: 回填天数（仅在无游标或 `forceBackfill` 时生效）
     ///   - forceBackfill: 为 true 时忽略游标，按 `backfillDays` 重新拉取历史
     func sync(
-        type: SyncDataType, highWater: Date?, backfillDays: Int, forceBackfill: Bool = false
+        type: SyncDataType,
+        highWater: Date?,
+        backfillDays: Int,
+        forceBackfill: Bool = false,
+        runID: UUID? = nil
     ) async throws -> SyncOutcome {
+        let syncStartedAt = Date()
+        await client.setDiagnosticRunID(runID)
         let now = Date()
         let start: Date
         if forceBackfill {
@@ -73,16 +79,35 @@ actor SyncEngine {
         }
         let startTime = MiAPIClient.dayStartEpoch(of: start)
         let endTime = MiAPIClient.dayEndEpoch(of: now)
+        DiagnosticLogger.record(
+            .info,
+            category: .sync,
+            event: "sync.engine.type.started",
+            message: "同步引擎开始处理数据类别",
+            runID: runID,
+            dataType: type.rawValue,
+            metadata: [
+                "forceBackfill": String(forceBackfill),
+                "backfillDays": String(backfillDays),
+                "startEpoch": String(startTime),
+                "endEpoch": String(endTime),
+            ]
+        )
 
         // 运动记录用 HKWorkoutBuilder 单独写入（不走通用分组保存）
         if type == .workouts {
             return try await syncWorkouts(
                 startTime: startTime, endTime: endTime, start: start, end: now,
-                forceBackfill: forceBackfill
+                forceBackfill: forceBackfill, runID: runID, startedAt: syncStartedAt
             )
         }
 
-        let groups = try await fetchAndMap(type: type, startTime: startTime, endTime: endTime)
+        let groups = try await fetchAndMap(
+            type: type,
+            startTime: startTime,
+            endTime: endTime,
+            runID: runID
+        )
 
         var added = 0
         var fetched = 0
@@ -117,24 +142,87 @@ actor SyncEngine {
             fetched += group.objects.count
         }
 
-        return SyncOutcome(type: type, fetched: fetched, added: added, highWater: now)
+        let outcome = SyncOutcome(type: type, fetched: fetched, added: added, highWater: now)
+        DiagnosticLogger.record(
+            .info,
+            category: .sync,
+            event: "sync.engine.type.completed",
+            message: "同步引擎已完成数据类别处理",
+            runID: runID,
+            dataType: type.rawValue,
+            metadata: [
+                "fetchedCount": String(fetched),
+                "addedCount": String(added),
+                "groupCount": String(groups.count),
+                "durationMs": Self.durationMilliseconds(since: syncStartedAt),
+            ]
+        )
+        return outcome
     }
 
     /// 压力数据同步：从云端拉取 stress key，返回样本及 API 实际查询范围。
     /// 压力数据无 HealthKit 对应类型，由 AppModel 写入 Core Data。
     func syncStress(
-        highWater: Date?, backfillDays: Int, forceBackfill: Bool = false
+        highWater: Date?,
+        backfillDays: Int,
+        forceBackfill: Bool = false,
+        runID: UUID? = nil
     ) async throws -> (
         samples: [MiStressSample], outcome: SyncOutcome,
         queriedStart: Date, queriedEnd: Date
     ) {
+        let startedAt = Date()
+        await client.setDiagnosticRunID(runID)
         let (_, now, startTime, endTime) = syncWindow(
             highWater: highWater, backfillDays: backfillDays, forceBackfill: forceBackfill
         )
-        let items = try await client.fetchData(key: "stress", startTime: startTime, endTime: endTime)
-        let samples = try MiParser.stressSamples(items)
+        DiagnosticLogger.record(
+            .info,
+            category: .stress,
+            event: "sync.stress.fetch_parse.started",
+            message: "开始拉取并解析压力数据",
+            runID: runID,
+            dataType: SyncDataType.stress.rawValue,
+            metadata: [
+                "forceBackfill": String(forceBackfill),
+                "backfillDays": String(backfillDays),
+                "startEpoch": String(startTime),
+                "endEpoch": String(endTime),
+            ]
+        )
+        let items: [MiItem]
+        let samples: [MiStressSample]
+        do {
+            items = try await client.fetchData(key: "stress", startTime: startTime, endTime: endTime)
+            samples = try MiParser.stressSamples(items)
+        } catch {
+            DiagnosticLogger.record(
+                .error,
+                category: .stress,
+                event: "sync.stress.fetch_parse.failed",
+                message: "拉取或解析压力数据失败",
+                runID: runID,
+                dataType: SyncDataType.stress.rawValue,
+                error: error,
+                metadata: ["durationMs": Self.durationMilliseconds(since: startedAt)]
+            )
+            throw error
+        }
         let queriedStart = Date(timeIntervalSince1970: TimeInterval(startTime))
         let queriedEnd = Date(timeIntervalSince1970: TimeInterval(endTime))
+        DiagnosticLogger.record(
+            .info,
+            category: .stress,
+            event: "sync.stress.fetch_parse.completed",
+            message: "压力数据拉取和解析完成",
+            runID: runID,
+            dataType: SyncDataType.stress.rawValue,
+            metadata: [
+                "itemCount": String(items.count),
+                "sampleCount": String(samples.count),
+                "durationMs": Self.durationMilliseconds(since: startedAt),
+            ]
+        )
         return (
             samples,
             SyncOutcome(type: .stress, fetched: samples.count, added: 0, highWater: now),
@@ -167,7 +255,56 @@ actor SyncEngine {
         let objects: [HKObject]
     }
 
-    private func fetchAndMap(type: SyncDataType, startTime: Int, endTime: Int) async throws -> [HKGroup] {
+    private func fetchAndMap(
+        type: SyncDataType,
+        startTime: Int,
+        endTime: Int,
+        runID: UUID?
+    ) async throws -> [HKGroup] {
+        let startedAt = Date()
+        DiagnosticLogger.record(
+            .debug,
+            category: .sync,
+            event: "sync.mapping.started",
+            message: "开始拉取并映射 HealthKit 数据对象",
+            runID: runID,
+            dataType: type.rawValue
+        )
+        do {
+            let groups = try await fetchAndMapContents(type: type, startTime: startTime, endTime: endTime)
+            DiagnosticLogger.record(
+                .debug,
+                category: .sync,
+                event: "sync.mapping.completed",
+                message: "数据映射完成",
+                runID: runID,
+                dataType: type.rawValue,
+                metadata: [
+                    "groupCount": String(groups.count),
+                    "objectCount": String(groups.reduce(0) { $0 + $1.objects.count }),
+                    "sampleTypeCount": String(Set(groups.map(\.sampleType.identifier)).count),
+                    "durationMs": Self.durationMilliseconds(since: startedAt),
+                ]
+            )
+            return groups
+        } catch {
+            DiagnosticLogger.record(
+                .error,
+                category: .sync,
+                event: "sync.mapping.failed",
+                message: "拉取或映射 HealthKit 数据对象失败",
+                runID: runID,
+                dataType: type.rawValue,
+                error: error,
+                metadata: ["durationMs": Self.durationMilliseconds(since: startedAt)]
+            )
+            throw error
+        }
+    }
+
+    private func fetchAndMapContents(
+        type: SyncDataType, startTime: Int, endTime: Int
+    ) async throws -> [HKGroup] {
         switch type {
         case .dailyActivity:
             let steps = try await client.fetchData(key: "steps", startTime: startTime, endTime: endTime)
@@ -223,7 +360,13 @@ actor SyncEngine {
 
     /// 运动记录：取数 → 生成草稿 → 用 HKWorkoutBuilder 逐条写入（按 externalUUID 去重）。
     private func syncWorkouts(
-        startTime: Int, endTime: Int, start: Date, end: Date, forceBackfill: Bool
+        startTime: Int,
+        endTime: Int,
+        start: Date,
+        end: Date,
+        forceBackfill: Bool,
+        runID: UUID?,
+        startedAt: Date
     ) async throws -> SyncOutcome {
         let items = try await client.fetchSportRecords(startTime: startTime, endTime: endTime)
         let drafts = MiParser.workouts(items).compactMap(TypeMapper.workoutDraft)
@@ -250,7 +393,25 @@ actor SyncEngine {
                 added += 1
             }
         }
-        return SyncOutcome(type: .workouts, fetched: drafts.count, added: added, highWater: Date())
+        let outcome = SyncOutcome(type: .workouts, fetched: drafts.count, added: added, highWater: Date())
+        DiagnosticLogger.record(
+            .info,
+            category: .sync,
+            event: "sync.engine.type.completed",
+            message: "运动记录同步引擎处理完成",
+            runID: runID,
+            dataType: SyncDataType.workouts.rawValue,
+            metadata: [
+                "fetchedCount": String(outcome.fetched),
+                "addedCount": String(outcome.added),
+                "durationMs": Self.durationMilliseconds(since: startedAt),
+            ]
+        )
+        return outcome
+    }
+
+    private static func durationMilliseconds(since start: Date) -> String {
+        String(max(0, Int(Date().timeIntervalSince(start) * 1_000)))
     }
 
     /// 按 HealthKit 样本类型分组（同一个同步批次内的不同 HK 类型需要分别去重）。

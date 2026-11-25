@@ -19,6 +19,11 @@ struct DiagnosticsLogView: View {
 
     private let visibleEventLimit = 2_000
     private let copyEventLimit = 10_000
+    private static let copyTimestampFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
 
     private var filteredEvents: [DiagnosticLogEvent] {
         snapshot.events.filter { event in
@@ -232,10 +237,12 @@ struct DiagnosticsLogView: View {
             do {
                 let syncRuns = try SyncRunStore.allThrowing()
                 let deviceModel = UIDevice.current.model
+                let systemVersion = UIDevice.current.systemVersion
                 let result = try await Task.detached(priority: .utility) {
                     try DiagnosticLogExporter.writeBundle(
                         syncRuns: syncRuns,
-                        deviceModel: deviceModel
+                        deviceModel: deviceModel,
+                        systemVersion: systemVersion
                     )
                 }.value
                 DiagnosticLogger.record(
@@ -288,9 +295,7 @@ struct DiagnosticsLogView: View {
     }
 
     private static func textLine(for event: DiagnosticLogEvent) -> String {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let timestamp = formatter.string(from: event.timestamp)
+        let timestamp = copyTimestampFormatter.string(from: event.timestamp)
         let run = event.runID.map { String($0.prefix(8)) } ?? "-"
         var line = "[\(timestamp)] [\(event.level.rawValue.uppercased())] [\(event.category.displayName)] \(event.event) run=\(run)"
         if let dataType = event.dataType { line += " type=\(dataType)" }
@@ -354,12 +359,12 @@ private struct DiagnosticLogDetailView: View {
     var body: some View {
         List {
             Section("事件") {
-                LabeledContent("時間", value: event.timestamp.formatted(date: .complete, time: .standard))
-                LabeledContent("級別", value: event.level.displayName)
-                LabeledContent("分類", value: event.category.displayName)
+                LabeledContent("时间", value: event.timestamp.formatted(date: .complete, time: .standard))
+                LabeledContent("级别", value: event.level.displayName)
+                LabeledContent("分类", value: event.category.displayName)
                 LabeledContent("事件名", value: event.event)
-                LabeledContent("進程 ID", value: String(event.processID))
-                LabeledContent("主線程", value: event.isMainThread ? "是" : "否")
+                LabeledContent("进程 ID", value: String(event.processID))
+                LabeledContent("主线程", value: event.isMainThread ? "是" : "否")
                 if let runID = event.runID {
                     LabeledContent("运行 ID", value: runID)
                 }
@@ -374,14 +379,14 @@ private struct DiagnosticLogDetailView: View {
             }
 
             if let errorDomain = event.errorDomain {
-                Section("錯誤") {
-                    LabeledContent("錯誤域", value: errorDomain)
-                    LabeledContent("錯誤碼", value: String(event.errorCode ?? 0))
+                Section("错误") {
+                    LabeledContent("错误域", value: errorDomain)
+                    LabeledContent("错误码", value: String(event.errorCode ?? 0))
                 }
             }
 
             if !event.metadata.isEmpty {
-                Section("安全元數據") {
+                Section("安全元数据") {
                     ForEach(event.metadata.keys.sorted(), id: \.self) { key in
                         LabeledContent(key, value: event.metadata[key] ?? "")
                     }
@@ -406,12 +411,31 @@ private struct DiagnosticActivitySheet: UIViewControllerRepresentable {
             activityItems: [fileURL],
             applicationActivities: nil
         )
-        controller.completionWithItemsHandler = { _, completed, _, _ in
+        if let popover = controller.popoverPresentationController {
+            popover.sourceView = controller.view
+            popover.sourceRect = CGRect(
+                x: controller.view.bounds.midX,
+                y: controller.view.bounds.midY,
+                width: 0,
+                height: 0
+            )
+            popover.permittedArrowDirections = []
+        }
+        controller.completionWithItemsHandler = { _, completed, _, error in
+            let level: DiagnosticLogLevel
+            if error != nil {
+                level = .error
+            } else {
+                level = completed ? .info : .notice
+            }
             DiagnosticLogger.record(
-                completed ? .info : .notice,
+                level,
                 category: .export,
                 event: "diagnostics.share.finished",
-                message: completed ? "系统分享流程已完成" : "系统分享流程已关闭",
+                message: error == nil
+                    ? (completed ? "系统分享流程已完成" : "系统分享流程已关闭")
+                    : "系统分享流程返回错误",
+                error: error,
                 metadata: ["completed": String(completed)]
             )
         }

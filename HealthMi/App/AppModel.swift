@@ -61,6 +61,12 @@ final class AppModel: ObservableObject {
     // MARK: - 初始化 / 凭据
 
     func bootstrap() {
+        DiagnosticLogger.record(
+            .info,
+            category: .appLifecycle,
+            event: "app.bootstrap.started",
+            message: "开始加载应用配置和登录状态"
+        )
         CredentialStore.migrateIfNeeded()
         loadEnabledTypes()
         if let cred = CredentialStore.load() {
@@ -68,6 +74,17 @@ final class AppModel: ObservableObject {
             accountID = mask(cred.userId)
         }
         refreshHealthKitStatus()
+        DiagnosticLogger.record(
+            .info,
+            category: .appLifecycle,
+            event: "app.bootstrap.completed",
+            message: "应用配置加载完成",
+            metadata: [
+                "isConfigured": String(isConfigured),
+                "enabledTypeCount": String(enabledTypes.count),
+                "healthKitAvailable": String(HealthKitManager.isAvailable),
+            ]
+        )
     }
 
     // MARK: - 同步类别开关
@@ -101,18 +118,47 @@ final class AppModel: ObservableObject {
     }
 
     func saveCredentials(userId: String, passToken: String) async throws {
-        try CredentialStore.save(userId: userId, passToken: passToken)
-        let engine = SyncEngine()
-        try await engine.connect(userId: userId, passToken: passToken)
-        self.engine = engine
-        isConfigured = true
-        connected = true
-        authNeedsRefresh = false
-        accountID = mask(userId)
-        refreshHealthKitStatus()
+        DiagnosticLogger.record(
+            .info,
+            category: .authentication,
+            event: "mi.credentials.save.started",
+            message: "开始保存并验证小米凭据"
+        )
+        do {
+            try CredentialStore.save(userId: userId, passToken: passToken)
+            let engine = SyncEngine()
+            try await engine.connect(userId: userId, passToken: passToken)
+            self.engine = engine
+            isConfigured = true
+            connected = true
+            authNeedsRefresh = false
+            accountID = mask(userId)
+            refreshHealthKitStatus()
+            DiagnosticLogger.record(
+                .info,
+                category: .authentication,
+                event: "mi.credentials.validation.succeeded",
+                message: "小米凭据验证成功"
+            )
+        } catch {
+            DiagnosticLogger.record(
+                .error,
+                category: .authentication,
+                event: "mi.credentials.validation.failed",
+                message: "保存或验证小米凭据失败",
+                error: error
+            )
+            throw error
+        }
     }
 
     func disconnect(modelContext: NSManagedObjectContext? = nil) {
+        DiagnosticLogger.record(
+            .notice,
+            category: .authentication,
+            event: "mi.account.disconnected",
+            message: "用户退出小米账号并清除账号相关数据"
+        )
         engine = nil
         CredentialStore.delete()
         isConfigured = false
@@ -131,12 +177,33 @@ final class AppModel: ObservableObject {
 
     func requestHealthKit() async throws {
         healthKitError = nil
+        DiagnosticLogger.record(
+            .info,
+            category: .healthKit,
+            event: "healthkit.authorization.requested",
+            message: "用户请求 HealthKit 授权",
+            metadata: ["shareTypeCount": String(HealthKitManager.typesToShare.count)]
+        )
         do {
             guard HealthKitManager.isAvailable else { throw AppError.healthKitUnavailable }
             try await HealthKitManager.requestAuthorization()
             refreshHealthKitStatus()
+            DiagnosticLogger.record(
+                .info,
+                category: .healthKit,
+                event: "healthkit.authorization.request.completed",
+                message: "HealthKit 授权请求流程已返回",
+                metadata: ["stepCountShareAuthorized": String(healthKitAuthorized)]
+            )
         } catch {
             healthKitError = Self.describeHealthKitError(error)
+            DiagnosticLogger.record(
+                .error,
+                category: .healthKit,
+                event: "healthkit.authorization.request.failed",
+                message: Self.describeHealthKitError(error),
+                error: error
+            )
             throw error
         }
     }
@@ -144,12 +211,33 @@ final class AppModel: ObservableObject {
     func refreshHealthKitStatus() {
         guard HealthKitManager.isAvailable else {
             healthKitAuthorized = false
+            DiagnosticLogger.record(
+                .warning,
+                category: .healthKit,
+                event: "healthkit.authorization.status.unavailable",
+                message: "当前设备不支持 HealthKit"
+            )
             return
         }
         let status = HealthKitManager.healthStore.authorizationStatus(
             for: HKQuantityType(.stepCount)
         )
         healthKitAuthorized = (status == .sharingAuthorized)
+        let writeStatuses = HealthKitManager.typesToShare
+            .map { "\($0.identifier)=\(HealthKitManager.healthStore.authorizationStatus(for: $0).rawValue)" }
+            .sorted()
+            .joined(separator: ",")
+        DiagnosticLogger.record(
+            .debug,
+            category: .healthKit,
+            event: "healthkit.authorization.status.checked",
+            message: "已检查 HealthKit 写入授权状态",
+            metadata: [
+                "stepCountStatus": String(status.rawValue),
+                "stepCountSharingAuthorized": String(healthKitAuthorized),
+                "writeAuthorizationStates": writeStatuses,
+            ]
+        )
     }
 
     // MARK: - 同步
@@ -167,13 +255,35 @@ final class AppModel: ObservableObject {
             HealthKitManager.healthStore.authorizationStatus(for: type) == .notDetermined
         }
         guard notDetermined else { return }
+        DiagnosticLogger.record(
+            .info,
+            category: .healthKit,
+            event: "healthkit.authorization.missing_types",
+            message: "发现尚未请求授权的 HealthKit 写入类型",
+            metadata: ["undeterminedTypeCount": String(HealthKitManager.typesToShare.filter {
+                HealthKitManager.healthStore.authorizationStatus(for: $0) == .notDetermined
+            }.count)]
+        )
         do {
             try await HealthKitManager.requestAuthorization()
             refreshHealthKitStatus()
+            DiagnosticLogger.record(
+                .info,
+                category: .healthKit,
+                event: "healthkit.authorization.refresh.completed",
+                message: "补充 HealthKit 授权流程已返回"
+            )
         } catch {
             let message = Self.describeHealthKitError(error)
             healthKitError = message
             lastError = message
+            DiagnosticLogger.record(
+                .error,
+                category: .healthKit,
+                event: "healthkit.authorization.refresh.failed",
+                message: message,
+                error: error
+            )
         }
     }
 
@@ -192,6 +302,21 @@ final class AppModel: ObservableObject {
         isBackground: Bool = false,
         runID: UUID? = nil
     ) async -> SyncRunStatus {
+        let diagnosticRunID = runID ?? UUID()
+        let syncStartedAt = Date()
+        DiagnosticLogger.record(
+            .info,
+            category: .sync,
+            event: "sync.run.started",
+            message: "开始执行健康数据同步",
+            runID: diagnosticRunID,
+            metadata: [
+                "trigger": isBackground ? "background" : (runID == nil ? "app" : "queued"),
+                "forceBackfill": String(forceBackfill),
+                "backfillDays": String(backfillDays),
+                "enabledTypeCount": String(enabledTypes.count),
+            ]
+        )
         guard Self.syncActivity.withLock({ state in
             if state { return false }
             state = true
@@ -204,6 +329,18 @@ final class AppModel: ObservableObject {
                 message: "已有同步在进行中，已跳过本次触发"
             )
             finishRun(runID, status: .failed, topLevelError: error)
+            DiagnosticLogger.record(
+                .warning,
+                category: .sync,
+                event: "sync.run.skipped.already_running",
+                message: "已有同步在进行中，跳过本次触发",
+                runID: diagnosticRunID,
+                error: NSError(
+                    domain: "HealthMi.Sync",
+                    code: 409,
+                    userInfo: [NSLocalizedDescriptionKey: "已有同步在进行中，跳过本次触发"]
+                )
+            )
             return .failed
         }
         defer { Self.syncActivity.withLock { $0 = false } }
@@ -226,6 +363,15 @@ final class AppModel: ObservableObject {
             )
             lastError = message
             statusMessage = "❌ HealthKit 权限未授权"
+            DiagnosticLogger.record(
+                .error,
+                category: .healthKit,
+                event: "sync.run.blocked.healthkit_permission",
+                message: message,
+                runID: diagnosticRunID,
+                errorDomain: HKErrorDomain,
+                errorCode: error.code
+            )
             finishRun(runID, status: .failed, topLevelError: error)
             await notifyRunIfNeeded(runID: runID, fallbackError: message, isBackground: isBackground)
             return .failed
@@ -237,6 +383,15 @@ final class AppModel: ObservableObject {
             let details = SyncErrorDetails.from(error)
             lastError = details.message
             statusMessage = "❌ \(details.message)"
+            DiagnosticLogger.record(
+                .error,
+                category: .authentication,
+                event: "sync.run.connection.failed",
+                message: details.message,
+                runID: diagnosticRunID,
+                error: error,
+                metadata: ["errorDomain": details.domain, "errorCode": String(details.code)]
+            )
             finishRun(runID, status: .failed, topLevelError: details)
             await notifyRunIfNeeded(runID: runID, fallbackError: details.message, isBackground: isBackground)
             return .failed
@@ -255,15 +410,39 @@ final class AppModel: ObservableObject {
             // 后台同步被系统取消时，尽早退出
             if Task.isCancelled {
                 cancelled = true
+                DiagnosticLogger.record(
+                    .notice,
+                    category: .sync,
+                    event: "sync.run.cancelled.before_type",
+                    message: "同步在开始下一类别前收到取消",
+                    runID: diagnosticRunID,
+                    dataType: type.rawValue,
+                    metadata: ["typeIndex": String(currentSyncIndex)]
+                )
                 break
             }
+            let typeStartedAt = Date()
+            DiagnosticLogger.record(
+                .info,
+                category: type == .stress ? .stress : .sync,
+                event: "sync.type.started",
+                message: "开始同步数据类别",
+                runID: diagnosticRunID,
+                dataType: type.rawValue,
+                metadata: [
+                    "typeIndex": String(currentSyncIndex),
+                    "typeCount": String(types.count),
+                    "forceBackfill": String(forceBackfill),
+                ]
+            )
             do {
                 let highWater = try SyncStateStore.state(for: type, in: modelContext)?.lastSyncedEnd
                 if type == .stress {
                     // 压力数据不走 HealthKit，存入 Core Data 供 App 内展示
                     let result = try await engine?.syncStress(
                         highWater: highWater, backfillDays: backfillDays,
-                        forceBackfill: forceBackfill
+                        forceBackfill: forceBackfill,
+                        runID: diagnosticRunID
                     )
                     if let result {
                         let added = try StressStore.replaceRange(
@@ -284,6 +463,19 @@ final class AppModel: ObservableObject {
                         messages.append("压力 +\(added)")
                         successCount += 1
                         recordRunSuccess(runID, type: .stress, fetched: result.samples.count, added: added)
+                        DiagnosticLogger.record(
+                            .info,
+                            category: .stress,
+                            event: "sync.type.completed",
+                            message: "压力数据同步和本地保存完成",
+                            runID: diagnosticRunID,
+                            dataType: type.rawValue,
+                            metadata: [
+                                "fetchedCount": String(result.samples.count),
+                                "addedCount": String(added),
+                                "durationMs": Self.durationMilliseconds(since: typeStartedAt),
+                            ]
+                        )
                         SyncLogStore.append(
                             type: .stress, fetched: result.samples.count,
                             added: added, success: true, in: modelContext
@@ -292,7 +484,8 @@ final class AppModel: ObservableObject {
                 } else {
                     let outcome = try await engine?.sync(
                         type: type, highWater: highWater, backfillDays: backfillDays,
-                        forceBackfill: forceBackfill
+                        forceBackfill: forceBackfill,
+                        runID: diagnosticRunID
                     )
                     if let outcome {
                         try SyncStateStore.record(
@@ -303,6 +496,19 @@ final class AppModel: ObservableObject {
                         messages.append("\(type.displayName) +\(outcome.added)")
                         successCount += 1
                         recordRunSuccess(runID, type: type, fetched: outcome.fetched, added: outcome.added)
+                        DiagnosticLogger.record(
+                            .info,
+                            category: .sync,
+                            event: "sync.type.completed",
+                            message: "数据类别同步和 HealthKit 写入完成",
+                            runID: diagnosticRunID,
+                            dataType: type.rawValue,
+                            metadata: [
+                                "fetchedCount": String(outcome.fetched),
+                                "addedCount": String(outcome.added),
+                                "durationMs": Self.durationMilliseconds(since: typeStartedAt),
+                            ]
+                        )
                         SyncLogStore.append(
                             type: type, fetched: outcome.fetched,
                             added: outcome.added, success: true, in: modelContext
@@ -312,12 +518,32 @@ final class AppModel: ObservableObject {
             } catch {
                 if Task.isCancelled || Self.isCancellation(error) {
                     cancelled = true
+                    DiagnosticLogger.record(
+                        .notice,
+                        category: type == .stress ? .stress : .sync,
+                        event: "sync.type.cancelled",
+                        message: "数据类别同步被取消",
+                        runID: diagnosticRunID,
+                        dataType: type.rawValue,
+                        error: error,
+                        metadata: ["durationMs": Self.durationMilliseconds(since: typeStartedAt)]
+                    )
                     break
                 }
                 let message = "\(type.displayName)：\(Self.describeSyncError(error))"
                 lastError = message
                 messages.append("\(type.displayName) ❌")
                 failureCount += 1
+                DiagnosticLogger.record(
+                    .error,
+                    category: type == .stress ? .stress : .sync,
+                    event: "sync.type.failed",
+                    message: message,
+                    runID: diagnosticRunID,
+                    dataType: type.rawValue,
+                    error: error,
+                    metadata: ["durationMs": Self.durationMilliseconds(since: typeStartedAt)]
+                )
                 recordRunFailure(runID, type: type, error: SyncErrorDetails.from(error))
                 SyncLogStore.append(
                     type: type, fetched: 0, added: 0,
@@ -350,6 +576,19 @@ final class AppModel: ObservableObject {
             )
             : nil
         finishRun(runID, status: finalStatus, topLevelError: topLevelError)
+        DiagnosticLogger.record(
+            finalStatus == .succeeded ? .info : (finalStatus == .cancelled ? .notice : .warning),
+            category: .sync,
+            event: "sync.run.finished",
+            message: "健康数据同步流程结束：\(finalStatus.displayName)",
+            runID: diagnosticRunID,
+            metadata: [
+                "status": finalStatus.rawValue,
+                "successCount": String(successCount),
+                "failureCount": String(failureCount),
+                "durationMs": Self.durationMilliseconds(since: syncStartedAt),
+            ]
+        )
         await notifyRunIfNeeded(runID: runID, fallbackError: lastError, isBackground: isBackground)
         return finalStatus
     }
@@ -368,12 +607,24 @@ final class AppModel: ObservableObject {
         return nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled
     }
 
+    private static func durationMilliseconds(since start: Date) -> String {
+        String(max(0, Int(Date().timeIntervalSince(start) * 1_000)))
+    }
+
     private func markRunRunning(_ runID: UUID?) {
         guard let runID else { return }
         do {
             try SyncRunStore.markRunning(runID)
         } catch {
             AppLog.syncRunStore.error("更新同步运行状态失败：\(error.localizedDescription)")
+            DiagnosticLogger.record(
+                .error,
+                category: .storage,
+                event: "sync.run.record.mark_running.failed",
+                message: "保存同步运行状态失败",
+                runID: runID,
+                error: error
+            )
         }
     }
 
@@ -383,6 +634,15 @@ final class AppModel: ObservableObject {
             try SyncRunStore.recordSuccess(id: runID, type: type, fetched: fetched, added: added)
         } catch {
             AppLog.syncRunStore.error("保存同步成功结果失败：\(error.localizedDescription)")
+            DiagnosticLogger.record(
+                .error,
+                category: .storage,
+                event: "sync.run.record.success.failed",
+                message: "保存同步成功结果失败",
+                runID: runID,
+                dataType: type.rawValue,
+                error: error
+            )
         }
     }
 
@@ -392,6 +652,15 @@ final class AppModel: ObservableObject {
             try SyncRunStore.recordFailure(id: runID, type: type, error: error)
         } catch {
             AppLog.syncRunStore.error("保存同步失败结果失败：\(error.localizedDescription)")
+            DiagnosticLogger.record(
+                .error,
+                category: .storage,
+                event: "sync.run.record.failure.failed",
+                message: "保存同步失败结果失败",
+                runID: runID,
+                dataType: type.rawValue,
+                error: error
+            )
         }
     }
 
@@ -401,6 +670,14 @@ final class AppModel: ObservableObject {
             try SyncRunStore.finish(id: runID, status: status, topLevelError: topLevelError)
         } catch {
             AppLog.syncRunStore.error("保存同步运行终态失败：\(error.localizedDescription)")
+            DiagnosticLogger.record(
+                .error,
+                category: .storage,
+                event: "sync.run.record.finish.failed",
+                message: "保存同步运行终态失败",
+                runID: runID,
+                error: error
+            )
         }
     }
 

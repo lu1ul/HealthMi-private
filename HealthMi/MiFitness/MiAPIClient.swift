@@ -80,6 +80,7 @@ actor MiAPIClient {
     private let maxPages = 200
 
     private var state: MiSessionState?
+    private var diagnosticRunID: UUID?
     private let session: URLSession
 
     init() {
@@ -92,6 +93,10 @@ actor MiAPIClient {
     }
 
     var isConnected: Bool { state != nil }
+
+    func setDiagnosticRunID(_ runID: UUID?) {
+        diagnosticRunID = runID
+    }
 
     /// 登录并建立会话。
     func connect(userId: String, passToken: String) async throws {
@@ -114,7 +119,11 @@ actor MiAPIClient {
 
     /// 带重试的签名请求：网络错误和 429/5xx HTTP 错误自动重试，
     /// 认证错误（code=70016）不重试直接抛出。
-    private func signedRequest(path: String, dataString: String) async throws -> [String: Any] {
+    private func signedRequest(
+        path: String,
+        dataString: String,
+        operation: String
+    ) async throws -> [String: Any] {
         let retries = maxRetries
         var lastError: Error?
         for attempt in 0...retries {
@@ -122,28 +131,95 @@ actor MiAPIClient {
                 // 指数退避：1s → 2s → 4s，加 0–200ms 随机抖动
                 let baseDelay = UInt64(pow(2.0, Double(attempt - 1))) * 1_000_000_000
                 let jitter = UInt64.random(in: 0...200_000_000)
+                DiagnosticLogger.record(
+                    .warning,
+                    category: .network,
+                    event: "mi.api.request.retry_scheduled",
+                    message: "小米 API 请求将按退避策略重试",
+                    runID: diagnosticRunID,
+                    dataType: operation,
+                    metadata: [
+                        "path": path,
+                        "attempt": String(attempt),
+                        "maximumRetries": String(retries),
+                        "delayMs": String((baseDelay + jitter) / 1_000_000),
+                    ]
+                )
                 AppLog.apiClient.info("重试 \(attempt)/\(retries) path=\(path)")
                 try await Task.sleep(nanoseconds: baseDelay + jitter)
             }
             do {
-                return try await signedRequestOnce(path: path, dataString: dataString)
+                return try await signedRequestOnce(
+                    path: path,
+                    dataString: dataString,
+                    operation: operation,
+                    attempt: attempt
+                )
             } catch let error as MiAPIError {
                 if error.isAuthError || error.isCancellation || !error.isRetriable {
+                    DiagnosticLogger.record(
+                        error.isCancellation ? .notice : .error,
+                        category: .network,
+                        event: "mi.api.request.failed_without_retry",
+                        message: "小米 API 请求失败且不会重试",
+                        runID: diagnosticRunID,
+                        dataType: operation,
+                        error: error,
+                        metadata: [
+                            "path": path,
+                            "attempt": String(attempt),
+                            "isAuthenticationError": String(error.isAuthError),
+                            "isCancellation": String(error.isCancellation),
+                        ]
+                    )
                     throw error
                 }
                 lastError = error
             } catch is CancellationError {
+                DiagnosticLogger.record(
+                    .notice,
+                    category: .network,
+                    event: "mi.api.request.cancelled",
+                    message: "小米 API 请求收到取消",
+                    runID: diagnosticRunID,
+                    dataType: operation,
+                    metadata: ["path": path, "attempt": String(attempt)]
+                )
                 throw CancellationError()
             } catch where Task.isCancelled {
+                DiagnosticLogger.record(
+                    .notice,
+                    category: .network,
+                    event: "mi.api.request.cancelled",
+                    message: "小米 API 请求所属任务已取消",
+                    runID: diagnosticRunID,
+                    dataType: operation,
+                    metadata: ["path": path, "attempt": String(attempt)]
+                )
                 throw CancellationError()
             } catch {
                 lastError = error
             }
         }
+        DiagnosticLogger.record(
+            .error,
+            category: .network,
+            event: "mi.api.request.retries_exhausted",
+            message: "小米 API 请求达到最大重试次数",
+            runID: diagnosticRunID,
+            dataType: operation,
+            error: lastError,
+            metadata: ["path": path, "maximumRetries": String(retries)]
+        )
         throw lastError ?? MiAPIError.invalidResponse("重试耗尽")
     }
 
-    private func signedRequestOnce(path: String, dataString: String) async throws -> [String: Any] {
+    private func signedRequestOnce(
+        path: String,
+        dataString: String,
+        operation: String,
+        attempt: Int
+    ) async throws -> [String: Any] {
         guard let state else { throw MiAPIError.notConnected }
 
         var form: [String: String] = ["data": dataString]
@@ -178,29 +254,135 @@ actor MiAPIClient {
 
         let data: Data
         let response: URLResponse
+        let requestStartedAt = ProcessInfo.processInfo.systemUptime
+        DiagnosticLogger.record(
+            .debug,
+            category: .network,
+            event: "mi.api.request.started",
+            message: "开始发送小米健康 API 请求",
+            runID: diagnosticRunID,
+            dataType: operation,
+            metadata: [
+                "method": "POST",
+                "path": path,
+                "attempt": String(attempt),
+                "requestBytes": String(request.httpBody?.count ?? 0),
+            ]
+        )
         do {
             (data, response) = try await session.data(for: request)
         } catch {
+            DiagnosticLogger.record(
+                .error,
+                category: .network,
+                event: "mi.api.request.transport_failed",
+                message: "小米健康 API 请求传输失败",
+                runID: diagnosticRunID,
+                dataType: operation,
+                error: error,
+                metadata: [
+                    "path": path,
+                    "attempt": String(attempt),
+                    "durationMs": Self.durationMilliseconds(since: requestStartedAt),
+                ]
+            )
             throw MiAPIError.network(error)
         }
-        if let http = response as? HTTPURLResponse, http.statusCode != 200 {
+        guard let http = response as? HTTPURLResponse else {
+            DiagnosticLogger.record(
+                .error,
+                category: .network,
+                event: "mi.api.request.invalid_http_response",
+                message: "小米健康 API 请求未返回 HTTP 响应",
+                runID: diagnosticRunID,
+                dataType: operation,
+                metadata: [
+                    "path": path,
+                    "attempt": String(attempt),
+                    "responseBytes": String(data.count),
+                    "durationMs": Self.durationMilliseconds(since: requestStartedAt),
+                ]
+            )
+            throw MiAPIError.invalidResponse("响应不是 HTTP")
+        }
+        DiagnosticLogger.record(
+            .debug,
+            category: .network,
+            event: "mi.api.request.response_received",
+            message: "收到小米健康 API HTTP 响应",
+            runID: diagnosticRunID,
+            dataType: operation,
+            metadata: [
+                "path": path,
+                "attempt": String(attempt),
+                "httpStatus": String(http.statusCode),
+                "responseBytes": String(data.count),
+                "durationMs": Self.durationMilliseconds(since: requestStartedAt),
+            ]
+        )
+        if http.statusCode != 200 {
             AppLog.apiClient.error("HTTP \(http.statusCode) path=\(path)")
             throw MiAPIError.http(http.statusCode)
         }
         guard let base64 = String(data: data, encoding: .utf8),
               let cipher = Data(base64Encoded: base64)
         else {
+            DiagnosticLogger.record(
+                .error,
+                category: .network,
+                event: "mi.api.response.invalid_base64",
+                message: "小米健康 API 响应不是合法 Base64",
+                runID: diagnosticRunID,
+                dataType: operation,
+                metadata: ["path": path, "attempt": String(attempt), "responseBytes": String(data.count)]
+            )
             throw MiAPIError.invalidResponse("响应不是合法 Base64")
         }
 
         let plain = MiCrypto.rc4Crypt(key: signedNonce, payload: Array(cipher))
         guard let obj = MiJSON.object(from: Data(plain)) else {
+            DiagnosticLogger.record(
+                .error,
+                category: .network,
+                event: "mi.api.response.invalid_json",
+                message: "小米健康 API 响应解密后无法解析为 JSON",
+                runID: diagnosticRunID,
+                dataType: operation,
+                metadata: ["path": path, "attempt": String(attempt), "responseBytes": String(data.count)]
+            )
             throw MiAPIError.invalidResponse("解密后不是合法 JSON")
         }
         let code = MiJSON.int(obj["code"]) ?? -1
         guard code == 0 else {
+            DiagnosticLogger.record(
+                .error,
+                category: .network,
+                event: "mi.api.response.service_error",
+                message: "小米健康 API 返回服务端错误码",
+                runID: diagnosticRunID,
+                dataType: operation,
+                metadata: [
+                    "path": path,
+                    "attempt": String(attempt),
+                    "serviceCode": String(code),
+                ]
+            )
             throw MiAPIError.api(code: code, message: MiJSON.string(obj["message"]))
         }
+        DiagnosticLogger.record(
+            .debug,
+            category: .network,
+            event: "mi.api.response.decrypted",
+            message: "小米健康 API 响应解密和外层解析成功",
+            runID: diagnosticRunID,
+            dataType: operation,
+            metadata: [
+                "path": path,
+                "attempt": String(attempt),
+                "serviceCode": String(code),
+                "durationMs": Self.durationMilliseconds(since: requestStartedAt),
+            ]
+        )
         // 与 Python 一致：返回内层 result 字典（data_list / sport_records 都在里面）
         return MiJSON.object(from: Data(plain))?["result"] as? [String: Any] ?? [:]
     }
@@ -213,60 +395,214 @@ actor MiAPIClient {
 
     /// 按 key 拉取某时间区间的数据（对应 `_fetch_key`）。
     func fetchData(key: String, startTime: Int, endTime: Int) async throws -> [MiItem] {
+        let fetchStartedAt = ProcessInfo.processInfo.systemUptime
+        DiagnosticLogger.record(
+            .info,
+            category: .network,
+            event: "mi.api.data_fetch.started",
+            message: "开始分页拉取小米健康数据",
+            runID: diagnosticRunID,
+            dataType: key,
+            metadata: ["path": dataPath, "startEpoch": String(startTime), "endEpoch": String(endTime)]
+        )
         var items: [MiItem] = []
         var nextKey: String?
         var seen = Set<String>()
         var page = 0
         while true {
             page += 1
-            guard page <= maxPages else { throw MiAPIError.paginationLimit }
+            guard page <= maxPages else {
+                DiagnosticLogger.record(
+                    .error,
+                    category: .network,
+                    event: "mi.api.pagination.limit_reached",
+                    message: "小米健康数据分页达到安全上限",
+                    runID: diagnosticRunID,
+                    dataType: key,
+                    metadata: ["path": dataPath, "pageCount": String(page - 1)]
+                )
+                throw MiAPIError.paginationLimit
+            }
             let body = Self.dataString(
                 startTime: startTime, endTime: endTime, key: key, nextKey: nextKey
             )
-            let result = try await signedRequest(path: dataPath, dataString: body)
+            let pageStartedAt = ProcessInfo.processInfo.systemUptime
+            DiagnosticLogger.record(
+                .debug,
+                category: .network,
+                event: "mi.api.data_page.started",
+                message: "开始请求小米健康数据分页",
+                runID: diagnosticRunID,
+                dataType: key,
+                metadata: ["path": dataPath, "pageIndex": String(page)]
+            )
+            let result = try await signedRequest(path: dataPath, dataString: body, operation: key)
 
+            var pageItemCount = 0
             if let list = result["data_list"] as? [[String: Any]] {
+                pageItemCount = list.count
                 items.append(contentsOf: list.map(Self.makeItem))
             }
             let hasMore = MiJSON.bool(result["has_more"]) ?? false
             let cursor = MiJSON.string(result["next_key"])
+            DiagnosticLogger.record(
+                .debug,
+                category: .network,
+                event: "mi.api.data_page.completed",
+                message: "小米健康数据分页解析完成",
+                runID: diagnosticRunID,
+                dataType: key,
+                metadata: [
+                    "path": dataPath,
+                    "pageIndex": String(page),
+                    "itemCount": String(pageItemCount),
+                    "hasMore": String(hasMore),
+                    "durationMs": Self.durationMilliseconds(since: pageStartedAt),
+                ]
+            )
             if !hasMore || cursor == nil { break }
-            if seen.contains(cursor!) { throw MiAPIError.cursorLoop }
+            if seen.contains(cursor!) {
+                DiagnosticLogger.record(
+                    .error,
+                    category: .network,
+                    event: "mi.api.pagination.cursor_loop",
+                    message: "小米健康数据分页游标重复，已停止请求",
+                    runID: diagnosticRunID,
+                    dataType: key,
+                    metadata: ["path": dataPath, "pageIndex": String(page)]
+                )
+                throw MiAPIError.cursorLoop
+            }
             seen.insert(cursor!)
             nextKey = cursor
             // 分页请求间隔，避免高频请求触发小米限流
             try await Task.sleep(nanoseconds: pageDelayNs)
         }
+        DiagnosticLogger.record(
+            .info,
+            category: .network,
+            event: "mi.api.data_fetch.completed",
+            message: "小米健康数据分页拉取完成",
+            runID: diagnosticRunID,
+            dataType: key,
+            metadata: [
+                "path": dataPath,
+                "pageCount": String(page),
+                "itemCount": String(items.count),
+                "durationMs": Self.durationMilliseconds(since: fetchStartedAt),
+            ]
+        )
         return items
     }
 
     /// 拉取运动记录（对应 `_fetch_sport_records_by_time`）。
     func fetchSportRecords(startTime: Int, endTime: Int) async throws -> [MiItem] {
+        let fetchStartedAt = ProcessInfo.processInfo.systemUptime
+        DiagnosticLogger.record(
+            .info,
+            category: .network,
+            event: "mi.api.sport_fetch.started",
+            message: "开始分页拉取小米运动记录",
+            runID: diagnosticRunID,
+            dataType: "sport",
+            metadata: ["path": sportRecordsPath, "startEpoch": String(startTime), "endEpoch": String(endTime)]
+        )
         var items: [MiItem] = []
         var nextKey: String?
         var seen = Set<String>()
         var page = 0
         while true {
             page += 1
-            guard page <= maxPages else { throw MiAPIError.paginationLimit }
+            guard page <= maxPages else {
+                DiagnosticLogger.record(
+                    .error,
+                    category: .network,
+                    event: "mi.api.sport_pagination.limit_reached",
+                    message: "小米运动记录分页达到安全上限",
+                    runID: diagnosticRunID,
+                    dataType: "sport",
+                    metadata: ["path": sportRecordsPath, "pageCount": String(page - 1)]
+                )
+                throw MiAPIError.paginationLimit
+            }
             let body = Self.dataString(
                 startTime: startTime, endTime: endTime, key: "sport", limit: 50, nextKey: nextKey
             )
-            let result = try await signedRequest(path: sportRecordsPath, dataString: body)
+            let pageStartedAt = ProcessInfo.processInfo.systemUptime
+            DiagnosticLogger.record(
+                .debug,
+                category: .network,
+                event: "mi.api.sport_page.started",
+                message: "开始请求小米运动记录分页",
+                runID: diagnosticRunID,
+                dataType: "sport",
+                metadata: ["path": sportRecordsPath, "pageIndex": String(page)]
+            )
+            let result = try await signedRequest(
+                path: sportRecordsPath,
+                dataString: body,
+                operation: "sport"
+            )
 
+            var pageItemCount = 0
             if let list = result["sport_records"] as? [[String: Any]] {
+                pageItemCount = list.count
                 items.append(contentsOf: list.map(Self.makeItem))
             }
             let hasMore = MiJSON.bool(result["has_more"]) ?? false
             let cursor = MiJSON.string(result["next_key"])
+            DiagnosticLogger.record(
+                .debug,
+                category: .network,
+                event: "mi.api.sport_page.completed",
+                message: "小米运动记录分页解析完成",
+                runID: diagnosticRunID,
+                dataType: "sport",
+                metadata: [
+                    "path": sportRecordsPath,
+                    "pageIndex": String(page),
+                    "itemCount": String(pageItemCount),
+                    "hasMore": String(hasMore),
+                    "durationMs": Self.durationMilliseconds(since: pageStartedAt),
+                ]
+            )
             if !hasMore || cursor == nil { break }
-            if seen.contains(cursor!) { throw MiAPIError.cursorLoop }
+            if seen.contains(cursor!) {
+                DiagnosticLogger.record(
+                    .error,
+                    category: .network,
+                    event: "mi.api.sport_pagination.cursor_loop",
+                    message: "小米运动记录分页游标重复，已停止请求",
+                    runID: diagnosticRunID,
+                    dataType: "sport",
+                    metadata: ["path": sportRecordsPath, "pageIndex": String(page)]
+                )
+                throw MiAPIError.cursorLoop
+            }
             seen.insert(cursor!)
             nextKey = cursor
             // 分页请求间隔，避免高频请求触发小米限流
             try await Task.sleep(nanoseconds: pageDelayNs)
         }
+        DiagnosticLogger.record(
+            .info,
+            category: .network,
+            event: "mi.api.sport_fetch.completed",
+            message: "小米运动记录分页拉取完成",
+            runID: diagnosticRunID,
+            dataType: "sport",
+            metadata: [
+                "path": sportRecordsPath,
+                "pageCount": String(page),
+                "itemCount": String(items.count),
+                "durationMs": Self.durationMilliseconds(since: fetchStartedAt),
+            ]
+        )
         return items
+    }
+
+    private static func durationMilliseconds(since start: TimeInterval) -> String {
+        String(max(0, Int((ProcessInfo.processInfo.systemUptime - start) * 1_000)))
     }
 
     // MARK: - 时间换算（中国区 +08:00）

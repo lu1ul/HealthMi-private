@@ -25,6 +25,7 @@ struct DailyTrend: Identifiable, Sendable {
 enum HealthKitReader {
     /// 最近 7 天（含今天）的摘要。
     static func summary(days: Int = 7) async -> HealthSummary {
+        let startedAt = Date()
         let end = Date()
         let start = Calendar.current.date(byAdding: .day, value: -(days - 1), to: end) ?? end
         var summary = HealthSummary()
@@ -41,6 +42,24 @@ enum HealthKitReader {
             .heartRateVariabilitySDNN, unit: .secondUnit(with: .milli), start: start, end: end
         )
         summary.sleepMinutes = try? await sleepMinutes(from: start, to: end)
+        let availableMetricCount = [
+            summary.stepCount,
+            summary.sleepMinutes,
+            summary.avgHeartRate,
+            summary.avgRespiratoryRate,
+            summary.avgHRV,
+        ].compactMap { $0 }.count
+        DiagnosticLogger.record(
+            .debug,
+            category: .healthKit,
+            event: "healthkit.summary.completed",
+            message: "HealthKit 最近时段摘要查询完成",
+            metadata: [
+                "dayCount": String(days),
+                "availableMetricCount": String(availableMetricCount),
+                "durationMs": Self.durationMilliseconds(since: startedAt),
+            ]
+        )
         return summary
     }
 
@@ -48,6 +67,7 @@ enum HealthKitReader {
 
     /// 最近 N 天每天的步数、心率、睡眠、HRV 趋势数据。
     static func trendSeries(days: Int = 7) async -> [DailyTrend] {
+        let startedAt = Date()
         let calendar = Calendar.current
         let now = Date()
         let start = calendar.date(byAdding: .day, value: -(days - 1), to: now) ?? now
@@ -81,6 +101,17 @@ enum HealthKitReader {
                 avgHRV: hrvMap[day]
             ))
         }
+        DiagnosticLogger.record(
+            .debug,
+            category: .healthKit,
+            event: "healthkit.trends.completed",
+            message: "HealthKit 每日趋势查询完成",
+            metadata: [
+                "dayCount": String(days),
+                "pointCount": String(trends.count),
+                "durationMs": Self.durationMilliseconds(since: startedAt),
+            ]
+        )
         return trends
     }
 
@@ -89,36 +120,69 @@ enum HealthKitReader {
         _ identifier: HKQuantityTypeIdentifier, unit: HKUnit,
         start: Date, end: Date, option: HKStatisticsOptions
     ) async throws -> [Date: Double] {
+        let startedAt = Date()
+        let sampleType = HKQuantityType(identifier).identifier
+        DiagnosticLogger.record(
+            .debug,
+            category: .healthKit,
+            event: "healthkit.trends.query.started",
+            message: "开始执行 HealthKit 每日统计查询",
+            dataType: sampleType
+        )
         let calendar = Calendar.current
         let anchor = calendar.startOfDay(for: start)
         var result: [Date: Double] = [:]
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            let predicate = HKQuery.predicateForSamples(withStart: start, end: end)
-            let query = HKStatisticsCollectionQuery(
-                quantityType: HKQuantityType(identifier),
-                quantitySamplePredicate: predicate,
-                options: option,
-                anchorDate: anchor,
-                intervalComponents: DateComponents(day: 1)
-            )
-            query.initialResultsHandler = { _, collection, error in
-                if let error {
-                    continuation.resume(throwing: error)
-                    return
-                }
-                collection?.enumerateStatistics(from: start, to: end) { stats, _ in
-                    let value: Double?
-                    if option == .cumulativeSum {
-                        value = stats.sumQuantity()?.doubleValue(for: unit)
-                    } else {
-                        value = stats.averageQuantity()?.doubleValue(for: unit)
+        do {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                let predicate = HKQuery.predicateForSamples(withStart: start, end: end)
+                let query = HKStatisticsCollectionQuery(
+                    quantityType: HKQuantityType(identifier),
+                    quantitySamplePredicate: predicate,
+                    options: option,
+                    anchorDate: anchor,
+                    intervalComponents: DateComponents(day: 1)
+                )
+                query.initialResultsHandler = { _, collection, error in
+                    if let error {
+                        continuation.resume(throwing: error)
+                        return
                     }
-                    let day = calendar.startOfDay(for: stats.startDate)
-                    if let value { result[day] = value }
+                    collection?.enumerateStatistics(from: start, to: end) { stats, _ in
+                        let value: Double?
+                        if option == .cumulativeSum {
+                            value = stats.sumQuantity()?.doubleValue(for: unit)
+                        } else {
+                            value = stats.averageQuantity()?.doubleValue(for: unit)
+                        }
+                        let day = calendar.startOfDay(for: stats.startDate)
+                        if let value { result[day] = value }
+                    }
+                    continuation.resume()
                 }
-                continuation.resume()
+                HealthKitManager.healthStore.execute(query)
             }
-            HealthKitManager.healthStore.execute(query)
+            DiagnosticLogger.record(
+                .debug,
+                category: .healthKit,
+                event: "healthkit.trends.query.completed",
+                message: "HealthKit 每日统计查询完成",
+                dataType: sampleType,
+                metadata: [
+                    "dayBucketCount": String(result.count),
+                    "durationMs": Self.durationMilliseconds(since: startedAt),
+                ]
+            )
+        } catch {
+            DiagnosticLogger.record(
+                .error,
+                category: .healthKit,
+                event: "healthkit.trends.query.failed",
+                message: "HealthKit 每日统计查询失败",
+                dataType: sampleType,
+                error: error,
+                metadata: ["durationMs": Self.durationMilliseconds(since: startedAt)]
+            )
+            throw error
         }
         return result
     }
@@ -186,38 +250,93 @@ enum HealthKitReader {
     private static func statistics(
         for type: HKQuantityType, predicate: NSPredicate, options: HKStatisticsOptions
     ) async throws -> HKStatistics {
-        try await withCheckedThrowingContinuation { continuation in
-            let query = HKStatisticsQuery(
-                quantityType: type,
-                quantitySamplePredicate: predicate,
-                options: options
-            ) { _, statistics, error in
-                if let error {
-                    continuation.resume(throwing: error)
-                } else if let statistics {
-                    continuation.resume(returning: statistics)
-                } else {
-                    continuation.resume(throwing: HealthKitReaderError.noStatistics)
+        let startedAt = Date()
+        let sampleType = type.identifier
+        do {
+            let statistics = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<HKStatistics, Error>) in
+                let query = HKStatisticsQuery(
+                    quantityType: type,
+                    quantitySamplePredicate: predicate,
+                    options: options
+                ) { _, statistics, error in
+                    if let error {
+                        continuation.resume(throwing: error)
+                    } else if let statistics {
+                        continuation.resume(returning: statistics)
+                    } else {
+                        continuation.resume(throwing: HealthKitReaderError.noStatistics)
+                    }
                 }
+                HealthKitManager.healthStore.execute(query)
             }
-            HealthKitManager.healthStore.execute(query)
+            DiagnosticLogger.record(
+                .debug,
+                category: .healthKit,
+                event: "healthkit.statistics.query.completed",
+                message: "HealthKit 汇总统计查询完成",
+                dataType: sampleType,
+                metadata: ["durationMs": Self.durationMilliseconds(since: startedAt)]
+            )
+            return statistics
+        } catch {
+            DiagnosticLogger.record(
+                .error,
+                category: .healthKit,
+                event: "healthkit.statistics.query.failed",
+                message: "HealthKit 汇总统计查询失败",
+                dataType: sampleType,
+                error: error,
+                metadata: ["durationMs": Self.durationMilliseconds(since: startedAt)]
+            )
+            throw error
         }
     }
 
     private static func query(_ type: HKObjectType, predicate: NSPredicate) async throws -> [HKObject] {
-        try await withCheckedThrowingContinuation { continuation in
-            let query = HKSampleQuery(
-                sampleType: type as! HKSampleType, predicate: predicate,
-                limit: HKObjectQueryNoLimit, sortDescriptors: nil
-            ) { _, samples, error in
-                if let error {
-                    continuation.resume(throwing: error)
-                } else {
-                    continuation.resume(returning: samples ?? [])
+        let startedAt = Date()
+        let sampleType = type.identifier
+        do {
+            let samples = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<[HKObject], Error>) in
+                let query = HKSampleQuery(
+                    sampleType: type as! HKSampleType, predicate: predicate,
+                    limit: HKObjectQueryNoLimit, sortDescriptors: nil
+                ) { _, samples, error in
+                    if let error {
+                        continuation.resume(throwing: error)
+                    } else {
+                        continuation.resume(returning: samples ?? [])
+                    }
                 }
+                HealthKitManager.healthStore.execute(query)
             }
-            HealthKitManager.healthStore.execute(query)
+            DiagnosticLogger.record(
+                .debug,
+                category: .healthKit,
+                event: "healthkit.samples.query.completed",
+                message: "HealthKit 样本查询完成",
+                dataType: sampleType,
+                metadata: [
+                    "sampleCount": String(samples.count),
+                    "durationMs": Self.durationMilliseconds(since: startedAt),
+                ]
+            )
+            return samples
+        } catch {
+            DiagnosticLogger.record(
+                .error,
+                category: .healthKit,
+                event: "healthkit.samples.query.failed",
+                message: "HealthKit 样本查询失败",
+                dataType: sampleType,
+                error: error,
+                metadata: ["durationMs": Self.durationMilliseconds(since: startedAt)]
+            )
+            throw error
         }
+    }
+
+    private static func durationMilliseconds(since start: Date) -> String {
+        String(max(0, Int(Date().timeIntervalSince(start) * 1_000)))
     }
 
     enum HealthKitReaderError: LocalizedError {
