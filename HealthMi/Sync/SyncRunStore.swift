@@ -150,7 +150,7 @@ struct SyncRunRecord: Codable, Hashable, Identifiable, Sendable {
         sortedItems.filter { !$0.success }
     }
 
-    /// 可直接作为快捷指令结果或同步历史摘要的详细文本。
+    /// 用于本地通知和同步历史摘要的详细文本。
     var dialogText: String {
         var lines = [
             "\(status.displayName)（运行 ID：\(shortID)）",

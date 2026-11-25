@@ -26,6 +26,7 @@
 - [x] Change both `perform()` signatures from `some IntentResult & ProvidesDialog` to `some IntentResult`.
 - [x] Replace every `.result(dialog: IntentDialog(...))` with `.result()`; remove the dialog string variables and the private `queuedDialog` / `activeDialog` helpers.
 - [x] Keep the existing error logging and `recordIntentReturn` events. Rename the error branch from `error_dialog` to `error_result` so logs reflect the new behavior.
+- [x] Update the status-query description and completion log so they do not claim that a visible status dialog is returned.
 - [x] In the existing active-run branch, resubmit only for `active.status == .queued`:
 
 ```swift

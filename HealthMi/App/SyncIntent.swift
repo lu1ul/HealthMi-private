@@ -238,7 +238,7 @@ struct SyncHealthDataIntent: AppIntent {
 /// 查询最近一次同步的运行级状态和详细错误。
 struct QueryLatestSyncStatusIntent: AppIntent {
     nonisolated static let title: LocalizedStringResource = "查询同步状态"
-    nonisolated static let description = IntentDescription("查看 HealthMi 最近一次同步的排队状态、成功类型和详细错误")
+    nonisolated static let description = IntentDescription("记录 HealthMi 最近一次同步状态查询；详细结果请在应用内查看")
     nonisolated static let openAppWhenRun = false
 
     @MainActor
@@ -273,7 +273,7 @@ struct QueryLatestSyncStatusIntent: AppIntent {
                 .info,
                 category: .appIntent,
                 event: "shortcut.status_query.completed",
-                message: "已返回最近同步运行状态",
+                message: "已读取最近同步运行状态，详细内容可在应用内查看",
                 runID: record.id,
                 metadata: invocation.metadata([
                     "status": record.status.rawValue,
