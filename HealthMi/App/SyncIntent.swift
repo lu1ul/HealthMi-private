@@ -326,8 +326,9 @@ struct HealthMiShortcuts: AppShortcutsProvider {
         AppShortcut(
             intent: QueryLatestSyncStatusIntent(),
             phrases: [
+                "查询\(.applicationName)同步状态",
                 "查询\(.applicationName)最近同步状态",
-                "查看\(.applicationName)同步状态",
+                "查看\(.applicationName)同步结果",
             ],
             shortTitle: "查询同步状态",
             systemImageName: "info.circle"

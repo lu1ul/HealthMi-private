@@ -1,3 +1,4 @@
+import AppIntents
 import CoreData
 import SwiftUI
 
@@ -143,6 +144,13 @@ struct HealthMiApp: App {
                 "buildNumber": Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "unknown",
                 "systemVersion": ProcessInfo.processInfo.operatingSystemVersionString,
             ]
+        )
+        HealthMiShortcuts.updateAppShortcutParameters()
+        DiagnosticLogger.record(
+            .info,
+            category: .appIntent,
+            event: "shortcut.discovery.refresh.requested",
+            message: "应用启动时已请求系统刷新 HealthMi 快捷指令信息"
         )
         // BGTask 处理器必须在进程启动时注册，不能依赖 SwiftUI 场景先出现。
         BackgroundSync.register {

@@ -1,3 +1,4 @@
+import AppIntents
 import CoreData
 import SwiftUI
 
@@ -231,6 +232,23 @@ struct DashboardView: View {
                     Text("各类数据状态")
                 } footer: {
                     Text("「上次同步」就是该类的增量进度；下次增量从它往前 1 天开始拉取。")
+                }
+
+                Section {
+                    ShortcutsLink {
+                        DiagnosticLogger.record(
+                            .info,
+                            category: .appIntent,
+                            event: "shortcut.discovery.link.tapped",
+                            message: "用户请求从 HealthMi 打开系统快捷指令页面"
+                        )
+                    }
+                    .shortcutsLinkStyle(.automaticOutline)
+                    .accessibilityLabel("打开快捷指令中的 HealthMi 页面")
+                } header: {
+                    Text("快捷指令")
+                } footer: {
+                    Text("打开系统快捷指令中的 HealthMi 页面，可添加“同步健康数据”和“查询同步状态”。")
                 }
 
                 Section {
