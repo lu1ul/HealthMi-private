@@ -13,6 +13,7 @@
 - **Keychain `-34018` 已确认是旧 TrollStore entitlement 打包缺口，并已修复。** 新产物同时含 `com.apple.developer.healthkit = true` 与 `keychain-access-groups = [TROLLTROLL.*, com.apple.token]`，真机登录已通过。
 - **iOS 16 最低版本适配的主流程已通过真机验收。** Core Data 存储、HealthKit 写入和 TrollStore 安装路径没有阻止 iOS 16.3 运行。
 - **快捷指令崩溃在 build 2 的 iOS 16.3 真机上仍然复现。** 新日志再次出现 `Did not declare ProvidesDialog but provided one`，随后 HealthMi PID `82873` 以 `SIGTRAP(5)` 退出。此前虽将源码返回签名改为 `some IntentResult & ProvidesDialog` 并成功构建，设备运行时仍判定返回契约未声明；因此此前“已修复”的结论不成立。后续要排除设备仍运行旧快捷指令定义/系统元数据的影响，或去掉 dialog 返回路径，用不返回对话框的 Intent 结果验证 iOS 16.3 兼容性。详见第 9.25 节。
+- **build 3 源码修复已在本地提交，尚待 GitHub 构建和真机复测。** 两个 Intent 改为只返回 `.result()`；复用 `queued` 记录时再次尝试立即提交 BGTask，失败则保留队列并写详细日志；24 小时 stale 阈值保持不变。构建产物尚未生成，不能据此宣称 iOS 16.3 runtime 已修复。详见第 9.26 节。
 - **同步快捷指令还卡在一个旧的 queued 运行记录。** build 2 日志连续复用运行 ID `3AC440E1`，排队年龄约 6 小时 49 分；代码对 queued 记录采用 24 小时过期阈值，故仍认作活动任务。应用启动时虽然成功提交 BGTask 请求，但没有观察到后台 handler 开始/领取记录。即使修正 Intent 崩溃，该旧队列也可能让用户反复得到“已有任务”而不启动新的同步。详见第 9.25 节。
 - **“查询同步状态”在快捷指令列表中是否出现仍待设备确认。** 本次日志记录的是同步动作执行，没有记录用户打开或搜索动作列表；新版加入启动时刷新 App Shortcuts、统一动作标题和仪表盘快捷指令入口，但这些包级改动不能代替 iOS 16.3 上的实际发现与运行验证。详见第 9.24 节。
 - **诊断日志源码已进入成功构建的 build 2。** 日志页、复制筛选文本和 JSON 文件导出，以及网络、HealthKit、快捷指令、后台任务、Keychain、登录和通知埋点均已实现；新版 IPA 已生成。此前的代码阶段提交 `176c2d0` 不再是“尚待编译”状态。详见第 9.19、9.24 节。
@@ -1612,3 +1613,19 @@ HealthKit HRV 汇总查询错误 `com.apple.healthkit/11` 没有关联同步 `ru
 4. **设备验收以系统日志为准。** 先确认没有 `Did not declare ProvidesDialog`、`Fatal error`、`SIGTRAP` 和 `FBSOpenApplicationServiceErrorDomain Code=5`；再用状态查询确认新 run 从 queued 进入 running/terminal 状态。若采用 ReturnsValue，再单独验证 Shortcuts 能拿到并显示详细文本。
 
 本节是日志分析和修复方案记录，没有修改源码或声称已生成 build 3。原始个人设备系统日志没有复制进仓库。
+
+### 9.26 build 3 源码修复：无对话框返回与 queued 重试（2026-11-25）
+
+用户确认兼容性优先方案后，已在本地完成源码阶段并提交。该修复针对两项有日志证据的问题：iOS 16.3 App Intents runtime 在返回 `.result(dialog:)` 后报 `Did not declare ProvidesDialog` 并触发 fatal；同一快捷指令重复运行时，旧的 `queued` 记录被复用但快捷指令分支没有重新提交立即调度。
+
+改动如下：
+
+- `SyncHealthDataIntent` 和 `QueryLatestSyncStatusIntent` 均改为 `async throws -> some IntentResult`，成功和错误路径只返回 `.result()`，删除 `IntentDialog`、`ProvidesDialog` 与构造对话框的辅助函数。快捷指令本身不再显示状态文本；详细同步状态保留在 App 内同步历史、通知和诊断日志。
+- 对活动运行状态为 `queued` 的调用，复用原运行 ID 并再次调用 `scheduleFromIntentIfRegistered(immediate: true)`。提交成功、当前进程未注册处理器和提交失败分别写入日志；提交失败不会把原 queued 记录标成失败。`.running` 记录仍不重复调度。
+- 继续使用 24 小时 queued stale 阈值。此前 10–15 分钟的建议由已确认设计取代，因为 `BGAppRefreshTask` 的实际执行由系统调度；以短阈值回收会把系统延迟显示为运行失败。`background.schedule.completed` 仍仅代表提交成功，必须看到 `background.handler.started`/运行领取事件才能确认实际执行。
+- `QueryLatestSyncStatusIntent` 的描述和完成日志改为明确说明查询动作无弹窗、详细内容在 App 查看，避免对 Shortcuts 可见行为作错误承诺。
+- `project.yml` 的 `CURRENT_PROJECT_VERSION` 升为 `3`，Marketing Version 保持 `1.1.0`，最低系统版本保持 `16.0`。
+
+源码静态检查已确认 `HealthMi/App/SyncIntent.swift` 不再包含 `ProvidesDialog`、`IntentDialog` 或 `.result(dialog:)`；`git diff --check` 通过。尚未运行 GitHub Actions，也尚未取得 build 3 IPA。真机是否不再 fatal、后台调度是否被系统领取，均仍待 iOS 16.3 + TrollStore 复测。
+
+本阶段提交：`5a89e82`（移除 dialog 并重试 queued）、`62c0694`（澄清静默状态查询描述）、`f25d3a2`（build number 3）。设计记录提交 `fc6c33f`，实施计划提交 `d582307`。构建和包核验结果将在取得 artifact 后补录。

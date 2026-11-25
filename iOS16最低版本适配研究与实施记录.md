@@ -298,6 +298,26 @@ Apple 官方来源：
 - [`openAppWhenRun`](https://developer.apple.com/documentation/appintents/appintent/openappwhenrun-223b1)
 - [`BGTaskScheduler.register`](https://developer.apple.com/documentation/backgroundtasks/bgtaskscheduler/register%28fortaskwithidentifier%3Ausing%3Alaunchhandler%3A%29)
 
+## 2026-11-25 build 3 快捷指令兼容修复记录
+
+### 代码检查与决定
+
+build 2 的 iOS 16.3 真机日志明确出现 `Did not declare ProvidesDialog but provided one`，尽管源码已声明 `some IntentResult & ProvidesDialog`。因此 build 3 移除两个 Intent 的对话框返回能力，统一返回 `some IntentResult` 和 `.result()`。快捷指令不直接显示状态文字；查询、失败原因和同步结果仍由 App 内同步历史、通知与诊断日志提供。
+
+活动任务复用逻辑现对 `.queued` 记录重提立即后台调度请求，不创建重复运行；如果当前 Intent 进程没有注册 handler，记录 deferred 状态；若提交失败，保存原 queued 记录并记录错误。`.running` 任务不重复调度。24 小时 stale 阈值保留，避免把 iOS 后台刷新被系统延迟执行误判成短期失败。请求提交成功不能作为 handler 已启动的证据。
+
+### 变更及本阶段验证
+
+- `HealthMi/App/SyncIntent.swift`：删除 `ProvidesDialog`、`IntentDialog`、`.result(dialog:)` 和对应对话框文案；添加 queued 重调度与结构化日志；状态查询描述改为说明详细结果在 App 内查看。
+- `HealthMi/Sync/SyncRunStore.swift`：更新 `dialogText` 注释，明确其用于本地通知与同步历史。
+- `project.yml`：版本为 `1.1.0 (3)`，最低部署目标仍为 iOS 16.0。
+- `rg` 静态扫描确认快捷指令源码中无 `ProvidesDialog`、`IntentDialog` 或 `.result(dialog:)`；`git diff --check` 通过。此处尚无 Xcode/GitHub Actions 构建结果，也不能替代 iOS 16.3 设备运行验证。
+- 本地提交：`5a89e82`、`62c0694`、`f25d3a2`。构建产物、Actions run 与 SHA-256 待后续补录。
+
+### 验收边界
+
+需由 GitHub Actions 构建并用 `gh` 下载 IPA，核对 build 3、iOS 16.0 部署目标、两个 App Intents 动作元数据和 TrollStore entitlement。用户安装后还需删除旧快捷指令动作、重建动作，再检查系统日志中没有 `ProvidesDialog` fatal / `SIGTRAP`，并查看新的 queued reschedule 事件。BGTask 是否真正启动仍需观察 `background.handler.started` 或运行状态变化。
+
 ## 2026-11-25 App Intents 返回契约与快捷指令发现入口
 
 用户从 iPhone iOS 16.3 + TrollStore 收集的 `pymobiledevice3` 系统日志直接指出：App Intents 返回 `.result(dialog:)` 后，运行时发现 `perform()` 签名未声明 `ProvidesDialog`；随后 Swift runtime fatal error，进程以 `SIGTRAP(5)` 退出，Shortcuts runner 才报告 XPC 1004/4097。两个 Intent 已改为 `some IntentResult & ProvidesDialog`。Apple `ProvidesDialog` 文档和官方 App Intent 模板均要求方法签名表达这项返回能力。

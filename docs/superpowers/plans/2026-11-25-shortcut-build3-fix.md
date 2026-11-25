@@ -83,11 +83,11 @@ if active.status == .queued {
 
 **Files:** Modify the three project records listed above.
 
-- [ ] Update the unreleased changelog: App Intents no longer produce dialogs; state lookup and detailed errors remain in app history, notifications, and diagnostic logs; queued reuse retries scheduling.
-- [ ] Add a dated report section separating confirmed code facts from the remaining iOS 16.3 device runtime check.
-- [ ] Add a dated iOS 16 compatibility entry with the reason for retaining the 24-hour queue expiration and the distinction between BGTask submission and handler start.
-- [ ] Update the design status to implemented and state that source checks verify removal of dialog code while IPA inspection verifies build number, deployment target, actions metadata, and TrollStore entitlements.
-- [ ] Run `git diff --check` and commit as `docs: record shortcut build 3 implementation`.
+- [x] Update the unreleased changelog: App Intents no longer produce dialogs; state lookup and detailed errors remain in app history, notifications, and diagnostic logs; queued reuse retries scheduling.
+- [x] Add a dated report section separating confirmed code facts from the remaining iOS 16.3 device runtime check.
+- [x] Add a dated iOS 16 compatibility entry with the reason for retaining the 24-hour queue expiration and the distinction between BGTask submission and handler start.
+- [x] Update the design status to implemented and state that source checks verify removal of dialog code while IPA inspection verifies build number, deployment target, actions metadata, and TrollStore entitlements.
+- [x] Run `git diff --check` and commit as `docs: record shortcut build 3 implementation`.
 
 ## Task 4: Build and inspect the GitHub artifact
 
