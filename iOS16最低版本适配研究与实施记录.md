@@ -314,4 +314,6 @@ Apple 官方来源：
 - [在 App 初始化时更新 App Shortcuts](https://developer.apple.com/documentation/appintents/acceleratingappinteractionswithappintents)
 - [`ShortcutsLink`](https://developer.apple.com/documentation/appintents/shortcutslink)
 
-此记录写入时 `git diff --check` 已通过；GitHub Actions 编译和 IPA 核验尚待完成，不能据此宣称新 IPA 已生成。
+GitHub Actions run `45567273417` 已成功，构建源码 SHA 为 `14a61fd636dcb18f13defa3213c606910fe64fa2`。TrollStore IPA：`build/shortcut-return-fix-45567273417/HealthMi-trollstore-healthkit-ipa/HealthMi-trollstore-healthkit.ipa`，SHA-256 `21C14D8CBEC6C54A5C5087FC7F5141CBD87BF2291B9F77E3DD9728D85942FD48`；unsigned 对照 IPA：`build/shortcut-return-fix-45567273417/HealthMi-unsigned-ipa/HealthMi-unsigned.ipa`，SHA-256 `6982A2ECD0A6B9AB985E8F813F1C14930FA1F949CCC4A838C8AE82A4B84FA9FA`。两个包均静态核验为 build 2、最低系统版本 16.0，并含同步和查询 Intent metadata。TrollStore 包的 HealthKit entitlement、TrollStore 标识和 Keychain access groups 也已核验。
+
+包级构建验证已经完成；iOS 16.3 TrollStore 真机安装后是否消除崩溃、查询动作是否出现在系统列表并可执行，仍需用户复测。设备日志没有记录快捷指令动作列表的浏览或搜索，因此“查询动作此前未显示”的根因仍未确定。

@@ -4,7 +4,7 @@
 > 源码审查基线：`82fef0f`（`fix: weak link SwiftData for iOS 16`；后续提交仅更新文档）。
 > 结论类型：静态代码审查 + 本地 IPA 包结构检查 + 2026-11-24 GitHub Actions 构建/模拟器诊断复核；初始审查阶段没有修改业务源码或运行构建，后续只验证了工作流和产物。
 
-## 当前结论（2026-11-24 真机验收后）
+## 当前结论（截至 2026-11-25）
 
 本报告早期章节保留了问题定位过程和当时的证据边界；以下内容是目前应采用的最终状态：
 
@@ -12,8 +12,9 @@
 - **数据同步已在 iOS 16.3 真机确认成功。** 小米账号登录成功，数据可以从小米云端同步并写入 Apple 健康。
 - **Keychain `-34018` 已确认是旧 TrollStore entitlement 打包缺口，并已修复。** 新产物同时含 `com.apple.developer.healthkit = true` 与 `keychain-access-groups = [TROLLTROLL.*, com.apple.token]`，真机登录已通过。
 - **iOS 16 最低版本适配的主流程已通过真机验收。** Core Data 存储、HealthKit 写入和 TrollStore 安装路径没有阻止 iOS 16.3 运行。
-- **当前未解决的问题是快捷指令动作运行时返回“无法与帮助程序通信”，随后又出现“因为 App 意外退出”。** 最新 run `45522292408` 的 IPA 已静态确认包含 Intent metadata、HealthKit/TrollStore entitlements；路线二也已把 Intent 主体缩减为运行记录读写、轻量排队和可选 BGTask 提交，但用户仍反馈失败。由此不能再把“完整同步太慢”作为首要解释。项目没有 App Intents extension target，Intent 类型编译在主 App target；`openAppWhenRun = false` 本身不足以证明它运行在独立帮助进程。当前优先排查冷启动时的 BGTask handler 注册时机、排队后立即触发的后台同步、App Intents 宿主/旧动作缓存。没有设备 `.ips` 前，无法把进程退出归因到其中任何一个。详见第 9.18 节。
-- **已增加用于后续定位的本地诊断日志功能源码。** 日志页、复制筛选文本和 JSON 文件导出已加入；本轮又补齐网络、HealthKit、快捷指令、后台任务、Keychain、登录和通知埋点，代码提交 `176c2d0`。该提交尚待 GitHub Actions 编译和 IPA 核验，因此目前只能确认源码，不代表新 IPA 已生成或真机日志采集已经验证。详见第 9.19 节。
+- **快捷指令“无法与帮助程序通信 / App 意外退出”的直接根因已由 iPhone 系统日志确认并修复。** App Intents 校验发现 `perform()` 返回了 dialog，却没有在方法签名中声明 `ProvidesDialog`；随后 Swift runtime fatal error，HealthMi 以 `SIGTRAP(5)` 退出。Shortcuts 的 XPC 1004/4097 是进程退出后的连带错误。两个 Intent 的返回签名已修正，新版 build 2 已由 GitHub Actions 成功构建并核验；仍需用户在 iOS 16.3 + TrollStore 上安装复测。详见第 9.23–9.24 节。
+- **“查询同步状态”在快捷指令列表中是否出现仍待设备确认。** 本次日志记录的是同步动作执行，没有记录用户打开或搜索动作列表；新版加入启动时刷新 App Shortcuts、统一动作标题和仪表盘快捷指令入口，但这些包级改动不能代替 iOS 16.3 上的实际发现与运行验证。详见第 9.24 节。
+- **诊断日志源码已进入成功构建的 build 2。** 日志页、复制筛选文本和 JSON 文件导出，以及网络、HealthKit、快捷指令、后台任务、Keychain、登录和通知埋点均已实现；新版 IPA 已生成。此前的代码阶段提交 `176c2d0` 不再是“尚待编译”状态。详见第 9.19、9.24 节。
 
 ## 一、结论摘要
 
@@ -1572,4 +1573,6 @@ GitHub Actions run `45547761743` 的 Release 编译在 `DiagnosticLogging.swift`
 
 快捷指令发现部分将查询 Intent 标题与短标题统一为“查询同步状态”，启动时调用 `HealthMiShortcuts.updateAppShortcutParameters()` 并留下刷新事件；仪表盘增加 `ShortcutsLink` 直达 HealthMi App Shortcuts 页面，同时在界面解释可添加的两个动作。`CURRENT_PROJECT_VERSION` 已从 1 提升为 2，Marketing Version 仍是 1.1.0。
 
-实施提交：根因文档 `13f4a2e`；返回类型修复 `9ad9c87`；诊断日志增强 `8846299`；快捷指令入口与 build 2 `41390eb`。本地 `git diff --check` 通过。当前处于 Windows 环境，未运行本机 Xcode 编译；即将把这些提交推送到私有远程 `personal`（`lu1ul/HealthMi-private`）触发 GitHub Actions。尚未生成本版 IPA，也尚未进行 iOS 16.3 真机复测；最终构建 ID、产物校验值和真机验证结果待后续补充。
+实施提交：根因文档 `13f4a2e`；返回类型修复 `9ad9c87`；诊断日志增强 `8846299`；快捷指令入口与 build 2 `41390eb`。GitHub Actions run [`45567273417`](https://github.com/lu1ul/HealthMi-private/actions/runs/45567273417) 已成功，构建源码 SHA 为 `14a61fd636dcb18f13defa3213c606910fe64fa2`。TrollStore IPA 位于 `build/shortcut-return-fix-45567273417/HealthMi-trollstore-healthkit-ipa/HealthMi-trollstore-healthkit.ipa`，SHA-256 为 `21C14D8CBEC6C54A5C5087FC7F5141CBD87BF2291B9F77E3DD9728D85942FD48`，大小 2,103,743 字节；unsigned 对照 IPA 位于 `build/shortcut-return-fix-45567273417/HealthMi-unsigned-ipa/HealthMi-unsigned.ipa`，SHA-256 为 `6982A2ECD0A6B9AB985E8F813F1C14930FA1F949CCC4A838C8AE82A4B84FA9FA`，大小 2,043,478 字节。
+
+IPA 解包复核确认两个包的 Bundle ID 均为 `com.healthmi.HealthMi`、版本 `1.1.0`、build `2`、最低系统版本 `16.0`；App Intents metadata 包含同步和查询动作，查询标题为“查询同步状态”。TrollStore 包还包含 HealthKit entitlement、TrollStore 标识和 Keychain access groups，且不含 provisioning profile。**以上是构建和包级验证，不是新版本已在真机运行的证据**；iOS 16.3 TrollStore 安装、同步 Intent 不再崩溃、查询动作是否显示及其可执行性仍待用户复测。

@@ -2,7 +2,7 @@
 
 日期：2026-11-25
 
-状态：代码与诊断文档已实施并分别本地提交；等待私有 GitHub Actions 构建和 iOS 16.3 真机复测。
+状态：代码已实施，私有 GitHub Actions 构建与 IPA 包级核验已成功；等待 iOS 16.3 真机复测。
 
 ## 背景
 
@@ -54,11 +54,11 @@ func perform() async throws -> some IntentResult & ProvidesDialog
 - `8846299 feat: trace shortcut intent return lifecycle`
 - `41390eb feat: expose shortcut discovery in app`
 
-本地 `git diff --check` 已通过；当前尚未完成 GitHub Xcode 编译、IPA 核验或设备复测。
+GitHub Actions run `45567273417` 已成功，构建源码 SHA 为 `14a61fd636dcb18f13defa3213c606910fe64fa2`。TrollStore IPA：`build/shortcut-return-fix-45567273417/HealthMi-trollstore-healthkit-ipa/HealthMi-trollstore-healthkit.ipa`，SHA-256 `21C14D8CBEC6C54A5C5087FC7F5141CBD87BF2291B9F77E3DD9728D85942FD48`；unsigned 对照 IPA：`build/shortcut-return-fix-45567273417/HealthMi-unsigned-ipa/HealthMi-unsigned.ipa`，SHA-256 `6982A2ECD0A6B9AB985E8F813F1C14930FA1F949CCC4A838C8AE82A4B84FA9FA`。解包检查确认两个包均为 Bundle ID `com.healthmi.HealthMi`、版本 `1.1.0`、build `2`、最低系统版本 `16.0`，并含同步和查询 Intent metadata；TrollStore 包的 HealthKit entitlement、TrollStore 标识和 Keychain access groups 已核验。设备端运行与查询动作发现仍未验证。
 
 ## 验证边界
 
-- GitHub Actions 编译和 IPA 解包可确认 iOS 16 部署目标、App Intents metadata、版本/构建号以及新增 UI 字符串进入产物。
+- GitHub Actions 编译和 IPA 解包已确认 iOS 16 部署目标、App Intents metadata、版本/构建号以及新增 UI 字符串进入产物。
 - 当前 Windows 环境无法代替 iPhone 执行 App Intents runtime。必须在 iOS 16.3 TrollStore 上重新运行同步快捷指令，并从 HealthMi 内 `ShortcutsLink` 进入 App Shortcuts 页面，确认查询动作是否出现且可执行。
 - 若查询动作仍缺失，需要再捕获 Shortcuts 操作列表打开期间的系统日志，并和新 IPA 的 metadata 一起核对；本次执行日志无法单独完成这项判断。
 
