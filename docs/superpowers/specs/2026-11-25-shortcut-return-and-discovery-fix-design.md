@@ -120,7 +120,7 @@ build 2 源码确实声明 `some IntentResult & ProvidesDialog`，Xcode 16.4 构
 - 将 `project.yml` 的 build number 从 2 提升至 3，保持最低系统版本 iOS 16.0 和原 Bundle ID 不变。
 - 修改 `HealthMi/App/SyncIntent.swift` 的两个 Intent 返回路径；在活动 queued 重用分支重试调度。若发现共享队列模型或错误边界必须调整，再更新本节设计并重新确认。
 - 更新 `CHANGELOG.md`、`HealthMi项目代码全面审查报告.md`、`iOS16最低版本适配研究与实施记录.md`，记录设计、变更和构建产物核验。每个实施阶段本地单独提交；构建只推送到用户私有仓库 `lu1ul/HealthMi-private`，不推送到原始仓库。
-- 验收：GitHub Actions 成功构建 iOS IPA；IPA 中版本 build 为 3、最低系统版本为 iOS 16.0，App Intents 元数据仍包含同步与查询动作；TrollStore IPA 的 HealthKit、Keychain entitlement 保持正确；解包和静态扫描确认二进制源码已不含 `ProvidesDialog`/`result(dialog:)` 快捷指令返回路径；生成 SHA-256 并用 `gh` 下载产物。
+- 验收：GitHub Actions 成功构建 iOS IPA；IPA 中版本 build 为 3、最低系统版本为 iOS 16.0，App Intents 元数据仍包含同步与查询动作；TrollStore IPA 的 HealthKit、Keychain entitlement 保持正确；源码静态扫描确认已删除 `ProvidesDialog`/`result(dialog:)` 快捷指令返回路径，IPA 检查负责验证产物版本、系统版本、动作元数据和 entitlement；生成 SHA-256 并用 `gh` 下载产物。
 - 设备运行时验收仍须在 iOS 16.3 + TrollStore 真机完成：卸载 build 2、移除并重建快捷指令动作后安装 build 3，检查没有 `Did not declare ProvidesDialog`、`SIGTRAP`、FBS Code 5；查看日志确认旧 queued 被重新调度，并在运行过期后明确回收。GitHub 构建和 IPA 静态检查不能代替这项真机验收。
 
 ### 官方资料
