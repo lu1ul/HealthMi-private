@@ -257,6 +257,12 @@ IPA 已包含 `Metadata.appintents`，因此这不是动作注册失败。旧提
 - 埋点代码本地 commit：`176c2d0 feat: instrument diagnostic logging across app flows`。README、CHANGELOG、审查报告及本文件的实现记录仍待本阶段本地提交。
 - IPA 构建与解包核验尚未完成；当前不能把源码实现等同于已编译 IPA，也不能称功能已在 iPhone 真机运行验证。
 
+### GitHub Actions 构建排错记录（2026-11-25）
+
+- 日志功能提交后首次构建 run `45547199421` 在 Swift 编译阶段失败；修复 URL 资源值设置实现后，第二次 run `45547761743` 仍返回同一编译错误。
+- 失败位置为 `HealthMi/Support/DiagnosticLogging.swift`：`URL.setResourceValues(_:)` 是 mutating 方法，而方法参数 `url` 默认不可变。修复为接收初始 URL 后复制到局部 `var url`，再设置排除备份属性。
+- 此错误尚未由 GitHub Actions 上的新构建验证；在新的构建完成前，不能宣称 IPA 已生成。工作流与远程分支仍限定为 `lu1ul/HealthMi-private`，不推送 `origin`。
+
 ## 2026-11-25 快捷指令仍提示通信失败/应用退出：根因重排
 
 用户反馈最新快捷指令仍显示“无法与帮助程序通信”，再次执行出现“因为 App 意外退出”。路线二已经把同步 Intent 主体缩减为轻量运行记录和可选 BGTask 提交；因此此前“Intent 直接执行九类完整同步导致超时”的解释不能再作为主结论。

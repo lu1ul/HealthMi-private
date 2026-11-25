@@ -242,7 +242,8 @@ private enum DiagnosticRedactor {
 }
 
 private enum DiagnosticLogFileAttributes {
-    static func excludeFromBackup(_ url: URL) {
+    static func excludeFromBackup(_ initialURL: URL) {
+        var url = initialURL
         var resourceValues = URLResourceValues()
         resourceValues.isExcludedFromBackup = true
         try? url.setResourceValues(resourceValues)

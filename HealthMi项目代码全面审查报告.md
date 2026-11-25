@@ -1480,3 +1480,9 @@ TrollStore IPA SHA-256 为 `885ACBCA4A3E90EB4468D4A5321C4248F5FA23350475412E8B85
 - 本地 Windows 环境没有 `swift` / `xcodebuild`，当前已执行 `git diff --check`；未运行 XCTest。源码变更提交为 `176c2d0 feat: instrument diagnostic logging across app flows`。
 - GitHub Actions iOS 16.0 Release 构建、IPA 的 HealthKit/TrollStore entitlement、App Intents metadata、MinimumOSVersion 和 SHA-256 核验尚待完成。构建只证明编译与包结构；快捷指令/后台任务/HealthKit 真机行为还需要 iOS 16.3 TrollStore 设备验证。
 - 设计与用户新增复制/查看要求保存在 `docs/superpowers/specs/2026-11-25-diagnostic-logging-design.md`，README 和 CHANGELOG 已同步描述本地日志查看、复制及导出功能。
+
+### 9.20 日志功能 IPA 构建排错（2026-11-25）
+
+GitHub Actions run `45547761743` 的 Release 编译在 `DiagnosticLogging.swift` 第 248 行失败。唯一明确 Swift 错误为：`cannot use mutating member on immutable value: 'url' is a 'let' constant`。`URL.setResourceValues(_:)` 会修改 URL 值，不能在不可变参数上调用。源码已改为先将传入 URL 复制到局部可变变量，再设置 `isExcludedFromBackup`。
+
+该修复尚待新的 GitHub Actions 编译验证。run `45547761743` 没有生成 IPA（打包和上传步骤均被跳过），所以此前任何已存在的 IPA 都不是这次新增诊断日志功能对应的构建产物。仅在新 run 成功后再记录并核验产物的 MinimumOSVersion、HealthKit/TrollStore entitlement、App Intents metadata 与 SHA-256。
