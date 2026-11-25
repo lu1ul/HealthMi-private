@@ -74,9 +74,9 @@ if active.status == .queued {
 
 **Files:** Modify `project.yml`.
 
-- [ ] Change `CURRENT_PROJECT_VERSION: "2"` to `CURRENT_PROJECT_VERSION: "3"`; retain marketing version `1.1.0` and deployment target `16.0`.
-- [ ] Check with `rg -n "CURRENT_PROJECT_VERSION|IPHONEOS_DEPLOYMENT_TARGET|MARKETING_VERSION" "project.yml"`; expected values are `3`, `16.0`, and `1.1.0`.
-- [ ] Run `git diff --check` and commit as `build: bump shortcut compatibility build to 3`.
+- [x] Change `CURRENT_PROJECT_VERSION: "2"` to `CURRENT_PROJECT_VERSION: "3"`; retain marketing version `1.1.0` and deployment target `16.0`.
+- [x] Check with `rg -n "CURRENT_PROJECT_VERSION|IPHONEOS_DEPLOYMENT_TARGET|MARKETING_VERSION" "project.yml"`; expected values are `3`, `16.0`, and `1.1.0`.
+- [x] Run `git diff --check` and commit as `build: bump shortcut compatibility build to 3`.
 
 ## Task 3: Record implementation decisions
 
