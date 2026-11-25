@@ -65,6 +65,16 @@ struct DiagnosticsLogView: View {
                         Text(Self.byteCountText(snapshot.storageBytes))
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                        if let newestEvent = snapshot.newestEvent {
+                            Text("最新：\(newestEvent.formatted(date: .abbreviated, time: .shortened))")
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                        }
+                        if let oldestEvent = snapshot.oldestEvent {
+                            Text("最早：\(oldestEvent.formatted(date: .abbreviated, time: .shortened))")
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                        }
                     }
                 }
 
