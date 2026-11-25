@@ -307,7 +307,7 @@ struct DiagnosticsLogView: View {
     private static func textLine(for event: DiagnosticLogEvent) -> String {
         let timestamp = copyTimestampFormatter.string(from: event.timestamp)
         let run = event.runID.map { String($0.prefix(8)) } ?? "-"
-        var line = "[\(timestamp)] [\(event.level.rawValue.uppercased())] [\(event.category.displayName)] \(event.event) run=\(run)"
+        var line = "[\(timestamp)] [\(event.level.rawValue.uppercased())] [\(event.category.displayName)] \(event.event) pid=\(event.processID) main=\(event.isMainThread ? "yes" : "no") run=\(run)"
         if let dataType = event.dataType { line += " type=\(dataType)" }
         line += " — \(event.message)"
         if let errorDomain = event.errorDomain {

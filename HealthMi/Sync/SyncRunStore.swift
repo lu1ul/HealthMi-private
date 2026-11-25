@@ -256,22 +256,24 @@ enum SyncRunStore {
     }
 
     /// 把超过合理执行时间的运行标成明确失败，避免永久阻塞后续排队。
-    static func markStale(now: Date = Date()) throws {
+    static func markStale(now: Date = Date(), invocationID: String? = nil) throws {
         var records = try load()
         var changed = false
+        var staleChanges: [(record: SyncRunRecord, ageSeconds: Int, thresholdSeconds: Int)] = []
         for index in records.indices {
             let record = records[index]
             let age = now.timeIntervalSince(record.lastUpdatedAt)
-            let isStale: Bool
+            let threshold: TimeInterval
             switch record.status {
             case .queued:
-                isStale = age > staleQueuedInterval
+                threshold = staleQueuedInterval
             case .running:
-                isStale = age > staleRunningInterval
+                threshold = staleRunningInterval
             default:
-                isStale = false
+                continue
             }
-            guard isStale else { continue }
+            guard age > threshold else { continue }
+            staleChanges.append((record, Int(age), Int(threshold)))
             records[index].status = .failed
             records[index].finishedAt = now
             records[index].topLevelError = SyncErrorDetails.make(
@@ -284,6 +286,25 @@ enum SyncRunStore {
         }
         if changed {
             try save(records)
+            for change in staleChanges {
+                var metadata = [
+                    "previousStatus": change.record.status.rawValue,
+                    "newStatus": SyncRunStatus.failed.rawValue,
+                    "trigger": change.record.trigger.rawValue,
+                    "queuedAtEpochSeconds": String(Int(change.record.queuedAt.timeIntervalSince1970)),
+                    "ageSeconds": String(change.ageSeconds),
+                    "staleAfterSeconds": String(change.thresholdSeconds),
+                ]
+                if let invocationID { metadata["invocationID"] = invocationID }
+                DiagnosticLogger.record(
+                    .warning,
+                    category: .sync,
+                    event: "sync.run.marked_stale",
+                    message: "超时同步运行已标记为失败",
+                    runID: change.record.id,
+                    metadata: metadata
+                )
+            }
         }
     }
 
