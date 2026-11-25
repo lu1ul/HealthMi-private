@@ -1308,3 +1308,12 @@ func perform() async throws -> some IntentResult {
 - 网络/Keychain/HealthKit/小米 API 错误的域码是否与设备系统返回值一致。
 
 本阶段本地提交：`0e524ed`、`75b07f6`。未执行远程 push。
+
+#### 首次远程编译诊断
+
+GitHub Actions run `45520859520` 使用 Xcode 16.4 编译 iOS 16 目标，发现两处 Swift 兼容问题：
+
+1. `CredentialStore.loadThrowing()` 需要显式 `try`；
+2. `AppShortcutsProvider` 的多动作声明使用结果构建器语法，不能手写 `[AppShortcut]` 数组字面量。
+
+两处已修复。该 run 在编译阶段终止，因此没有生成本次新 IPA；下一次 workflow 的成功与否将决定能否进行安装包级验证。

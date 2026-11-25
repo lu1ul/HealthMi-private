@@ -31,7 +31,7 @@ struct SyncHealthDataIntent: AppIntent {
 
     @MainActor
     private func enqueueRun() throws -> String {
-        guard CredentialStore.loadThrowing() != nil else {
+        guard try CredentialStore.loadThrowing() != nil else {
             throw AppError.noCredentials
         }
         guard HealthKitManager.isAvailable else {
@@ -89,26 +89,24 @@ struct QueryLatestSyncStatusIntent: AppIntent {
 /// 快捷指令注册：Siri / 快捷指令 App 中可搜索到同步和状态查询动作。
 struct HealthMiShortcuts: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {
-        [
-            AppShortcut(
-                intent: SyncHealthDataIntent(),
-                phrases: [
-                    "同步\(.applicationName)健康数据",
-                    "同步\(.applicationName)",
-                    "\(.applicationName)健康同步",
-                ],
-                shortTitle: "同步健康数据",
-                systemImageName: "arrow.triangle.2.circlepath"
-            ),
-            AppShortcut(
-                intent: QueryLatestSyncStatusIntent(),
-                phrases: [
-                    "查询\(.applicationName)最近同步状态",
-                    "查看\(.applicationName)同步状态",
-                ],
-                shortTitle: "查询同步状态",
-                systemImageName: "info.circle"
-            ),
-        ]
+        AppShortcut(
+            intent: SyncHealthDataIntent(),
+            phrases: [
+                "同步\(.applicationName)健康数据",
+                "同步\(.applicationName)",
+                "\(.applicationName)健康同步",
+            ],
+            shortTitle: "同步健康数据",
+            systemImageName: "arrow.triangle.2.circlepath"
+        )
+        AppShortcut(
+            intent: QueryLatestSyncStatusIntent(),
+            phrases: [
+                "查询\(.applicationName)最近同步状态",
+                "查看\(.applicationName)同步状态",
+            ],
+            shortTitle: "查询同步状态",
+            systemImageName: "info.circle"
+        )
     }
 }

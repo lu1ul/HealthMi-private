@@ -96,6 +96,13 @@
 - `0e524ed feat: persist detailed sync run results`
 - `75b07f6 feat: queue shortcut sync in background`
 
+### GitHub Actions 首次编译诊断
+
+- run `45520859520`（Xcode 16.4、iOS 16 部署目标）在 Swift 编译阶段失败，尚未进入 IPA 打包。
+- `SyncIntent.swift` 的 `CredentialStore.loadThrowing()` 是可抛错调用，必须使用 `try`；已修正。
+- `AppShortcutsProvider.appShortcuts` 在 Xcode 16.4 使用结果构建器，多个快捷方式应依次列出 `AppShortcut` 表达式，不能手写 `[AppShortcut]` 数组字面量；已修正。
+- 修正后需要重新推送并观察下一次 workflow，确认进入 IPA 打包和 entitlement 校验阶段。
+
 ## 官方资料
 
 - [Apple SwiftData 文档](https://developer.apple.com/documentation/swiftdata)
