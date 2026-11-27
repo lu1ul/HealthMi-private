@@ -62,12 +62,12 @@
 - Modify: `HealthMi/App/DiagnosticsLogView.swift`
 - Modify: `HealthMi/Support/DiagnosticLogging.swift`
 
-- [ ] 在诊断日志页面展示本进程的写入/报告失败计数、轮转与清理计数、最近存储错误、总占用和损坏行数。
-- [ ] 增加“系统诊断报告”区，列出接收时间、大小和摘要；报告详情显示可选择复制的格式化脱敏 JSON，并提供一键复制。
-- [ ] 事件详情与纯文本复制增加进程会话 ID、序号、源码位置和错误链；搜索支持新字段。
-- [ ] 导出 manifest schema 升至 2，新增 `storageHealth`、`metricKitDiagnostics`，报告 payload 保持 JSON 对象嵌套；继续保留事件、设备/系统版本和同步运行摘要。
-- [ ] 更新界面隐私提示，明确 MetricKit 调用栈会留在本地，只有用户主动导出/分享才离开沙盒；清空确认明确会删除 MetricKit 报告。
-- [ ] 静态检查旧事件可解码、JSON 报告已脱敏且导出结构与 schema 一致后 Commit: `feat: view and export MetricKit diagnostics`
+- [x] 在诊断日志页面展示本进程的写入/报告失败计数、轮转与清理计数、最近存储错误、总占用和损坏行数。
+- [x] 增加“系统诊断报告”区，列出接收时间、大小和摘要；报告详情显示可选择复制的格式化脱敏 JSON，并提供一键复制。
+- [x] 事件详情与纯文本复制增加进程会话 ID、序号、源码位置和错误链；搜索支持新字段。
+- [x] 导出 manifest schema 升至 2，新增 `storageHealth`、`metricKitDiagnostics`，报告 payload 保持 JSON 对象嵌套；继续保留事件、设备/系统版本和同步运行摘要。
+- [x] 更新界面隐私提示，明确 MetricKit 调用栈会留在本地，只有用户主动导出/分享才离开沙盒；清空确认明确会删除 MetricKit 报告。
+- [x] 静态检查旧事件可解码、JSON 报告已脱敏且导出结构与 schema 一致后 Commit: `feat: view and export MetricKit diagnostics`
 
 ## Task 5: 更新 build number 并产出匹配 dSYM
 

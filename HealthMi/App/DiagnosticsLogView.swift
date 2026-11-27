@@ -44,6 +44,12 @@ struct DiagnosticsLogView: View {
                 event.runID ?? "",
                 event.errorDomain ?? "",
                 event.errorCode.map { String($0) } ?? "",
+                event.processSessionID ?? "",
+                event.sequenceNumber.map { String($0) } ?? "",
+                event.sourceFile ?? "",
+                event.sourceFunction ?? "",
+                event.sourceLine.map { String($0) } ?? "",
+                event.errorChain?.map { "\($0.domain)/\($0.code) \($0.message)" }.joined(separator: " ") ?? "",
                 event.metadata.map { "\($0.key)=\($0.value)" }.joined(separator: " "),
             ].joined(separator: " ").localizedLowercase
             return searchable.contains(query)
@@ -61,7 +67,7 @@ struct DiagnosticsLogView: View {
                     Label("保留日志", systemImage: "doc.text.magnifyingglass")
                     Spacer()
                     VStack(alignment: .trailing, spacing: 3) {
-                        Text("\(snapshot.events.count) 条")
+                        Text("\(snapshot.events.count) 条事件 · \(snapshot.metricKitReports.count) 份系统报告")
                         Text(Self.byteCountText(snapshot.storageBytes))
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -111,7 +117,34 @@ struct DiagnosticsLogView: View {
                     showClearConfirmation = true
                 }
             } footer: {
-                Text("复制会生成可粘贴的脱敏文本；文件导出包含全部保留日志和最近同步摘要。日志保存在本机，最多 20 MiB，保留 14 天。")
+                Text("复制会生成可粘贴的脱敏事件文本；文件导出包含事件、系统诊断报告和最近同步摘要。日志和报告自动保存在本机，不会自动上传；只有主动导出/分享时才会离开应用。总容量最多 20 MiB，保留 14 天。")
+            }
+
+            Section("存储健康（本进程启动以来）") {
+                LabeledContent("事件写入失败", value: "\(snapshot.storageHealth.eventWriteFailureCount) 次")
+                LabeledContent("系统报告写入失败", value: "\(snapshot.storageHealth.metricKitWriteFailureCount) 次")
+                LabeledContent("清理维护失败", value: "\(snapshot.storageHealth.maintenanceFailureCount) 次")
+                LabeledContent("日志文件轮转", value: "\(snapshot.storageHealth.rotatedFileCount) 次")
+                LabeledContent(
+                    "清理旧文件",
+                    value: "\(snapshot.storageHealth.prunedFileCount) 个 / \(Self.byteCountText(snapshot.storageHealth.prunedByteCount))"
+                )
+                if let domain = snapshot.storageHealth.lastErrorDomain {
+                    LabeledContent("最近存储错误") {
+                        VStack(alignment: .trailing, spacing: 2) {
+                            Text("\(domain)/\(snapshot.storageHealth.lastErrorCode ?? 0)")
+                            if let message = snapshot.storageHealth.lastErrorMessage {
+                                Text(message)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .multilineTextAlignment(.trailing)
+                            }
+                        }
+                    }
+                } else {
+                    LabeledContent("最近存储错误", value: "无")
+                }
+                LabeledContent("无法解析的记录", value: "\(snapshot.corruptedLineCount) 条")
             }
 
             Section("筛选") {
@@ -130,6 +163,22 @@ struct DiagnosticsLogView: View {
                 }
 
                 Toggle("仅显示警告及错误", isOn: $showWarningsAndErrors)
+            }
+
+            Section("系统诊断报告（MetricKit）") {
+                if snapshot.metricKitReports.isEmpty {
+                    Text("当前没有系统诊断报告。iOS 仅在生成并投递报告时提供数据；没有报告不代表没有异常。")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(snapshot.metricKitReports) { report in
+                        NavigationLink {
+                            MetricKitDiagnosticDetailView(report: report)
+                        } label: {
+                            MetricKitDiagnosticRow(report: report)
+                        }
+                    }
+                }
             }
 
             Section("日志（最新在前）") {
@@ -161,7 +210,7 @@ struct DiagnosticsLogView: View {
         }
         .navigationTitle("诊断日志")
         .navigationBarTitleDisplayMode(.inline)
-        .searchable(text: $searchText, prompt: "搜索事件、错误、运行 ID")
+        .searchable(text: $searchText, prompt: "搜索事件、错误、会话 ID、源码位置")
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button {
@@ -182,7 +231,7 @@ struct DiagnosticsLogView: View {
             Button("清空日志", role: .destructive, action: clearLogs)
             Button("取消", role: .cancel) {}
         } message: {
-            Text("此操作只删除诊断日志，不会清除同步历史、同步游标或压力数据。")
+            Text("此操作会删除本机事件日志和 MetricKit 报告，不会清除同步历史、同步游标或压力数据。")
         }
         .alert(
             "无法完成操作",
@@ -262,6 +311,7 @@ struct DiagnosticsLogView: View {
                     message: "JSON 诊断文件已生成",
                     metadata: [
                         "eventCount": String(result.eventCount),
+                        "metricKitReportCount": String(result.reportCount),
                         "byteCount": String(result.byteCount),
                     ]
                 )
@@ -306,12 +356,22 @@ struct DiagnosticsLogView: View {
 
     private static func textLine(for event: DiagnosticLogEvent) -> String {
         let timestamp = copyTimestampFormatter.string(from: event.timestamp)
-        let run = event.runID.map { String($0.prefix(8)) } ?? "-"
-        var line = "[\(timestamp)] [\(event.level.rawValue.uppercased())] [\(event.category.displayName)] \(event.event) pid=\(event.processID) main=\(event.isMainThread ? "yes" : "no") run=\(run)"
+        let run = event.runID ?? "-"
+        let sequence = event.sequenceNumber.map { String($0) } ?? "-"
+        let session = event.processSessionID ?? "-"
+        var line = "[\(timestamp)] [\(event.level.rawValue.uppercased())] [\(event.category.displayName)] \(event.event) pid=\(event.processID) main=\(event.isMainThread ? "yes" : "no") session=\(session) seq=\(sequence) run=\(run)"
         if let dataType = event.dataType { line += " type=\(dataType)" }
+        if let sourceFile = event.sourceFile, let sourceLine = event.sourceLine {
+            line += " source=\(sourceFile):\(sourceLine)"
+            if let sourceFunction = event.sourceFunction { line += " function=\(sourceFunction)" }
+        }
         line += " — \(event.message)"
         if let errorDomain = event.errorDomain {
             line += " error=\(errorDomain)/\(event.errorCode ?? 0)"
+        }
+        if let errorChain = event.errorChain, !errorChain.isEmpty {
+            let chain = errorChain.map { "\($0.domain)/\($0.code): \($0.message)" }
+            line += " underlying=[\(chain.joined(separator: " <- "))]"
         }
         if !event.metadata.isEmpty {
             let metadata = event.metadata.keys.sorted().map { "\($0)=\(event.metadata[$0] ?? "")" }
@@ -375,6 +435,21 @@ private struct DiagnosticLogDetailView: View {
                 LabeledContent("事件名", value: event.event)
                 LabeledContent("进程 ID", value: String(event.processID))
                 LabeledContent("主线程", value: event.isMainThread ? "是" : "否")
+                if let processSessionID = event.processSessionID {
+                    LabeledContent("进程会话 ID", value: processSessionID)
+                }
+                if let sequenceNumber = event.sequenceNumber {
+                    LabeledContent("进程内序号", value: String(sequenceNumber))
+                }
+                if let sourceFile = event.sourceFile {
+                    LabeledContent("源文件", value: sourceFile)
+                }
+                if let sourceFunction = event.sourceFunction {
+                    LabeledContent("函数", value: sourceFunction)
+                }
+                if let sourceLine = event.sourceLine {
+                    LabeledContent("行号", value: String(sourceLine))
+                }
                 if let runID = event.runID {
                     LabeledContent("运行 ID", value: runID)
                 }
@@ -392,6 +467,17 @@ private struct DiagnosticLogDetailView: View {
                 Section("错误") {
                     LabeledContent("错误域", value: errorDomain)
                     LabeledContent("错误码", value: String(event.errorCode ?? 0))
+                    if let errorChain = event.errorChain {
+                        ForEach(Array(errorChain.enumerated()), id: \.offset) { index, item in
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(index == 0 ? "原始错误" : "底层错误 \(index)")
+                                    .font(.caption.weight(.semibold))
+                                Text("\(item.domain)/\(item.code): \(item.message)")
+                                    .font(.caption)
+                                    .textSelection(.enabled)
+                            }
+                        }
+                    }
                 }
             }
 
@@ -405,6 +491,102 @@ private struct DiagnosticLogDetailView: View {
         }
         .navigationTitle("日志详情")
         .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+private struct MetricKitDiagnosticRow: View {
+    let report: DiagnosticMetricKitReport
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 6) {
+                Text(report.reportType)
+                    .font(.caption.weight(.semibold))
+                Spacer(minLength: 4)
+                Text(report.receivedAt.formatted(date: .abbreviated, time: .shortened))
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+            Text(report.summary)
+                .font(.subheadline)
+                .lineLimit(2)
+            Text(ByteCountFormatter.string(fromByteCount: Int64(report.byteCount), countStyle: .file))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 3)
+    }
+}
+
+@MainActor
+private struct MetricKitDiagnosticDetailView: View {
+    let report: DiagnosticMetricKitReport
+    @State private var copyMessage: String?
+    @State private var formattedPayload = ""
+    @State private var isFormatting = true
+
+    var body: some View {
+        List {
+            Section("报告") {
+                LabeledContent("类型", value: report.reportType)
+                LabeledContent("接收时间", value: report.receivedAt.formatted(date: .complete, time: .standard))
+                LabeledContent("大小", value: ByteCountFormatter.string(fromByteCount: Int64(report.byteCount), countStyle: .file))
+                LabeledContent("报告 ID", value: String(report.id.prefix(16)))
+                Text("报告已在保存前执行敏感字段过滤。系统控制报告是否生成和投递；列表为空不能证明没有发生异常。")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+
+            if let copyMessage {
+                Section {
+                    Label(copyMessage, systemImage: "checkmark.circle")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Section("脱敏 JSON") {
+                if isFormatting {
+                    HStack {
+                        ProgressView()
+                        Text("正在准备报告内容…")
+                            .foregroundStyle(.secondary)
+                    }
+                } else {
+                    Text(formattedPayload)
+                        .font(.system(.caption, design: .monospaced))
+                        .textSelection(.enabled)
+                }
+            }
+        }
+        .navigationTitle("系统诊断报告")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button {
+                    UIPasteboard.general.string = formattedPayload
+                    copyMessage = "已复制脱敏 MetricKit 报告"
+                    DiagnosticLogger.record(
+                        .info,
+                        category: .export,
+                        event: "diagnostics.metrickit.copy.completed",
+                        message: "已复制单份脱敏 MetricKit 诊断报告",
+                        metadata: ["reportID": String(report.id.prefix(16))]
+                    )
+                } label: {
+                    Image(systemName: "doc.on.doc")
+                }
+                .disabled(isFormatting)
+                .accessibilityLabel("复制系统诊断报告 JSON")
+            }
+        }
+        .task(id: report.id) {
+            isFormatting = true
+            formattedPayload = await Task.detached(priority: .utility) {
+                report.formattedPayload
+            }.value
+            isFormatting = false
+        }
     }
 }
 
