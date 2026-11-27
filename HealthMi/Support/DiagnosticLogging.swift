@@ -1,6 +1,7 @@
 import Foundation
 import OSLog
 import UIKit
+import CryptoKit
 
 enum DiagnosticLogLevel: String, Codable, CaseIterable, Identifiable, Sendable {
     case trace
@@ -62,6 +63,7 @@ enum DiagnosticLogCategory: String, Codable, CaseIterable, Identifiable, Sendabl
     case appIntent
     case notification
     case export
+    case diagnostics
 
     var id: String { rawValue }
 
@@ -79,6 +81,7 @@ enum DiagnosticLogCategory: String, Codable, CaseIterable, Identifiable, Sendabl
         case .appIntent: return "快捷指令"
         case .notification: return "通知"
         case .export: return "日志导出"
+        case .diagnostics: return "系统诊断报告"
         }
     }
 }
@@ -97,6 +100,12 @@ struct DiagnosticLogEvent: Codable, Hashable, Identifiable, Sendable {
     let metadata: [String: String]
     let processID: Int32
     let isMainThread: Bool
+    let processSessionID: String?
+    let sequenceNumber: UInt64?
+    let sourceFile: String?
+    let sourceFunction: String?
+    let sourceLine: UInt?
+    let errorChain: [DiagnosticErrorDetail]?
 
     init(
         id: UUID = UUID(),
@@ -110,9 +119,13 @@ struct DiagnosticLogEvent: Codable, Hashable, Identifiable, Sendable {
         error: Error?,
         errorDomain: String? = nil,
         errorCode: Int? = nil,
-        metadata: [String: String]
+        metadata: [String: String],
+        sourceFile: String,
+        sourceFunction: String,
+        sourceLine: UInt
     ) {
         let nsError = error.map { $0 as NSError }
+        let context = DiagnosticEventContext.next()
         self.id = id
         self.timestamp = timestamp
         self.level = level
@@ -128,13 +141,103 @@ struct DiagnosticLogEvent: Codable, Hashable, Identifiable, Sendable {
         self.metadata = DiagnosticRedactor.safeMetadata(metadata)
         self.processID = ProcessInfo.processInfo.processIdentifier
         self.isMainThread = Thread.isMainThread
+        self.processSessionID = context.sessionID
+        self.sequenceNumber = context.sequenceNumber
+        self.sourceFile = DiagnosticRedactor.redact(sourceFile, limit: 160)
+        self.sourceFunction = DiagnosticRedactor.redact(sourceFunction, limit: 240)
+        self.sourceLine = sourceLine
+        self.errorChain = error.map { DiagnosticErrorDetail.chain(from: $0) }
     }
+}
+
+private final class DiagnosticEventSequencer: @unchecked Sendable {
+    private let lock = NSLock()
+    private let sessionID = UUID().uuidString
+    private var sequenceNumber: UInt64 = 0
+
+    func next() -> (sessionID: String, sequenceNumber: UInt64) {
+        lock.lock()
+        defer { lock.unlock() }
+        sequenceNumber &+= 1
+        return (sessionID, sequenceNumber)
+    }
+}
+
+private enum DiagnosticEventContext {
+    private static let sequencer = DiagnosticEventSequencer()
+
+    static func next() -> (sessionID: String, sequenceNumber: UInt64) {
+        sequencer.next()
+    }
+}
+
+struct DiagnosticErrorDetail: Codable, Hashable, Sendable {
+    let domain: String
+    let code: Int
+    let message: String
+
+    static func chain(from error: Error, maximumDepth: Int = 5) -> [DiagnosticErrorDetail] {
+        var result: [DiagnosticErrorDetail] = []
+        var current: NSError? = error as NSError
+        var visited = Set<ObjectIdentifier>()
+
+        while let value = current, result.count < maximumDepth {
+            let identity = ObjectIdentifier(value)
+            guard visited.insert(identity).inserted else { break }
+            result.append(
+                DiagnosticErrorDetail(
+                    domain: DiagnosticRedactor.redact(value.domain, limit: 200),
+                    code: value.code,
+                    message: DiagnosticRedactor.redact(value.localizedDescription, limit: 1_024)
+                )
+            )
+            current = value.userInfo[NSUnderlyingErrorKey] as? NSError
+        }
+        return result
+    }
+}
+
+struct DiagnosticStorageHealth: Codable, Sendable {
+    var eventWriteFailureCount = 0
+    var metricKitWriteFailureCount = 0
+    var maintenanceFailureCount = 0
+    var rotatedFileCount = 0
+    var prunedFileCount = 0
+    var prunedByteCount = 0
+    var lastErrorDomain: String?
+    var lastErrorCode: Int?
+    var lastErrorMessage: String?
+}
+
+struct DiagnosticMetricKitReport: Codable, Hashable, Identifiable, Sendable {
+    let id: String
+    let reportType: String
+    let receivedAt: Date
+    let byteCount: Int
+    let summary: String
+    let payload: DiagnosticJSONValue
 }
 
 struct DiagnosticLogSnapshot: Sendable {
     let events: [DiagnosticLogEvent]
+    let metricKitReports: [DiagnosticMetricKitReport]
     let storageBytes: Int
     let corruptedLineCount: Int
+    let storageHealth: DiagnosticStorageHealth
+
+    init(
+        events: [DiagnosticLogEvent],
+        metricKitReports: [DiagnosticMetricKitReport] = [],
+        storageBytes: Int,
+        corruptedLineCount: Int,
+        storageHealth: DiagnosticStorageHealth = DiagnosticStorageHealth()
+    ) {
+        self.events = events
+        self.metricKitReports = metricKitReports
+        self.storageBytes = storageBytes
+        self.corruptedLineCount = corruptedLineCount
+        self.storageHealth = storageHealth
+    }
 
     var oldestEvent: Date? { events.map(\.timestamp).min() }
     var newestEvent: Date? { events.map(\.timestamp).max() }
@@ -153,7 +256,10 @@ enum DiagnosticLogger {
         error: Error? = nil,
         errorDomain: String? = nil,
         errorCode: Int? = nil,
-        metadata: [String: String] = [:]
+        metadata: [String: String] = [:],
+        file: String = #fileID,
+        function: String = #function,
+        line: UInt = #line
     ) {
         let entry = DiagnosticLogEvent(
             level: level,
@@ -165,11 +271,22 @@ enum DiagnosticLogger {
             error: error,
             errorDomain: errorDomain,
             errorCode: errorCode,
-            metadata: metadata
+            metadata: metadata,
+            sourceFile: file,
+            sourceFunction: function,
+            sourceLine: line
         )
         let systemLogger = Logger(subsystem: subsystem, category: category.rawValue)
         let fields = entry.metadata.keys.sorted().map { "\($0)=\(entry.metadata[$0] ?? "")" }
         var summary = "\(entry.event): \(entry.message)"
+        if let sequenceNumber = entry.sequenceNumber {
+            let sessionID = entry.processSessionID.map { String($0.prefix(8)) } ?? "-"
+            summary += " seq=\(sequenceNumber) session=\(sessionID)"
+        }
+        summary += " pid=\(entry.processID) main=\(entry.isMainThread ? "yes" : "no")"
+        if let sourceFile = entry.sourceFile, let sourceLine = entry.sourceLine {
+            summary += " source=\(sourceFile):\(sourceLine)"
+        }
         if let dataType = entry.dataType { summary += " type=\(dataType)" }
         if let runID = entry.runID { summary += " run=\(runID.prefix(8))" }
         if let errorDomain = entry.errorDomain { summary += " error=\(errorDomain)/\(entry.errorCode ?? 0)" }
@@ -189,21 +306,35 @@ enum DiagnosticLogger {
 private enum DiagnosticRedactor {
     private static let sensitiveKeyFragments = [
         "authorization", "cookie", "password", "passwd", "passtoken",
-        "token", "ssecurity", "servicetoken", "userid", "accountid",
-        "deviceid", "email", "phone", "mobile",
+        "token", "secret", "apikey", "privatekey", "credential",
+        "ssecurity", "servicetoken", "userid", "accountid", "deviceid",
+        "clientid", "vendorid", "installid", "serialnumber", "udid",
+        "devicename", "identifierforvendor", "uniqueidentifier", "hardwareuuid",
+        "clientidentifier", "advertisingid", "email", "phone", "mobile",
     ]
     private static let maximumMetadataCount = 64
 
     static func safeMetadata(_ values: [String: String]) -> [String: String] {
         var safe: [String: String] = [:]
         for key in values.keys.sorted().prefix(maximumMetadataCount) {
-            let normalizedKey = key.lowercased().filter { $0.isLetter || $0.isNumber }
-            guard !sensitiveKeyFragments.contains(where: { normalizedKey.contains($0) }),
+            guard !isSensitiveKey(key),
                   let value = values[key]
             else { continue }
             safe[redact(key, limit: 80)] = redact(value, limit: 512)
         }
         return safe
+    }
+
+    static func safeJSON(_ data: Data, maximumBytes: Int) throws -> Data {
+        guard data.count <= maximumBytes else { throw DiagnosticJSONError.payloadTooLarge }
+        let object = try JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed])
+        let filtered = try sanitizeJSON(object, depth: 0)
+        let safeData = try JSONSerialization.data(
+            withJSONObject: filtered,
+            options: [.sortedKeys, .fragmentsAllowed]
+        )
+        guard safeData.count <= maximumBytes else { throw DiagnosticJSONError.payloadTooLarge }
+        return safeData
     }
 
     static func redact(_ input: String, limit: Int) -> String {
@@ -213,7 +344,7 @@ private enum DiagnosticRedactor {
             .replacingOccurrences(of: "\n", with: " ")
             .replacingOccurrences(of: "\t", with: " ")
         value = replacing(
-            pattern: "(?i)\\b(passToken|password|passwd|authorization|set-cookie|cookie|ssecurity|serviceToken|token|userId|accountId|deviceId|email|phone|mobile)\\b\\s*[:=]\\s*(\\\"[^\\\"]*\\\"|'[^']*'|[^\\s,;]+)",
+            pattern: "(?i)(?<![A-Za-z0-9])(pass[_-]?token|password|passwd|authorization|set-cookie|cookie|ssecurity|service[_-]?token|access[_-]?token|refresh[_-]?token|token|secret|api[_-]?key|private[_-]?key|user[_-]?id|account[_-]?id|device[_-]?id|device[_-]?name|client[_-]?(?:id|identifier)|vendor[_-]?id|identifier[_-]?for[_-]?vendor|unique[_-]?identifier|hardware[_-]?uuid|install[_-]?id|serial[_-]?number|udid|advertising[_-]?id|email|phone|mobile)(?:[_-][A-Za-z0-9]+)*(?![A-Za-z0-9])\\s*[:=]\\s*(\\\"[^\\\"]*\\\"|'[^']*'|[^\\s,;]+)",
             in: value,
             template: "$1=[REDACTED]"
         )
@@ -221,6 +352,16 @@ private enum DiagnosticRedactor {
             pattern: "(?i)\\b(bearer)\\s+[^\\s,;]+",
             in: value,
             template: "$1 [REDACTED]"
+        )
+        value = replacing(
+            pattern: "(?i)\\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}\\b",
+            in: value,
+            template: "[REDACTED_EMAIL]"
+        )
+        value = replacing(
+            pattern: "(?i)(https?://)[^/@\\s]+@",
+            in: value,
+            template: "$1[REDACTED]@"
         )
         value = replacing(
             pattern: "(?i)(https?://[^\\s?#]+)\\?[^\\s]*",
@@ -239,6 +380,50 @@ private enum DiagnosticRedactor {
             withTemplate: template
         )
     }
+
+    private static func isSensitiveKey(_ key: String) -> Bool {
+        let normalizedKey = key.lowercased().filter { $0.isLetter || $0.isNumber }
+        return sensitiveKeyFragments.contains(where: { normalizedKey.contains($0) })
+    }
+
+    private static func sanitizeJSON(_ value: Any, depth: Int) throws -> Any {
+        guard depth < 32 else { throw DiagnosticJSONError.nestingTooDeep }
+        if let dictionary = value as? [String: Any] {
+            var safe: [String: Any] = [:]
+            for (key, item) in dictionary where !isSensitiveKey(key) {
+                let safeKey = redact(key, limit: 80)
+                safe[safeKey] = try sanitizeJSON(item, depth: depth + 1)
+            }
+            return safe
+        }
+        if let array = value as? [Any] {
+            return try array.map { try sanitizeJSON($0, depth: depth + 1) }
+        }
+        if let string = value as? String {
+            return redact(string, limit: 4_096)
+        }
+        if let number = value as? NSNumber {
+            return number
+        }
+        if value is NSNull {
+            return NSNull()
+        }
+        throw DiagnosticJSONError.unsupportedValue
+    }
+
+    private enum DiagnosticJSONError: LocalizedError {
+        case payloadTooLarge
+        case nestingTooDeep
+        case unsupportedValue
+
+        var errorDescription: String? {
+            switch self {
+            case .payloadTooLarge: return "MetricKit 诊断报告超过 8 MiB 上限"
+            case .nestingTooDeep: return "MetricKit 诊断报告 JSON 嵌套超过安全上限"
+            case .unsupportedValue: return "MetricKit 诊断报告包含不支持的 JSON 值"
+            }
+        }
+    }
 }
 
 private enum DiagnosticLogFileAttributes {
@@ -250,10 +435,21 @@ private enum DiagnosticLogFileAttributes {
     }
 }
 
+private enum DiagnosticMetricKitFileAttributes {
+    static func protectAndExcludeFromBackup(_ url: URL) {
+        try? FileManager.default.setAttributes(
+            [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
+            ofItemAtPath: url.path
+        )
+        DiagnosticLogFileAttributes.excludeFromBackup(url)
+    }
+}
+
 final class DiagnosticLogStore: @unchecked Sendable {
     static let shared = DiagnosticLogStore()
 
     private static let maximumFileBytes = 2 * 1_024 * 1_024
+    private static let maximumMetricKitReportBytes = 8 * 1_024 * 1_024
     private static let maximumTotalBytes = 20 * 1_024 * 1_024
     private static let retentionInterval: TimeInterval = 14 * 24 * 60 * 60
     private static let currentFileName = "diagnostics-current.jsonl"
@@ -269,6 +465,7 @@ final class DiagnosticLogStore: @unchecked Sendable {
     private let fileManager = FileManager.default
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
+    private var storageHealth = DiagnosticStorageHealth()
 
     private init() {
         let encoder = JSONEncoder()
@@ -296,18 +493,82 @@ final class DiagnosticLogStore: @unchecked Sendable {
             var data = try encoder.encode(event)
             data.append(0x0A)
             try ensureDirectory()
-            _ = try rotateCurrentFileIfNeeded(incomingBytes: data.count)
+            if try rotateCurrentFileIfNeeded(incomingBytes: data.count) {
+                storageHealth.rotatedFileCount += 1
+            }
             let url = currentFileURL
             guard fileManager.fileExists(atPath: url.path) else {
                 try createCurrentFile()
                 try write(data, to: currentFileURL)
+                pruneOldFilesAfterWrite()
                 return
             }
             try write(data, to: url)
-            try pruneOldFiles(now: Date())
         } catch {
+            storageHealth.eventWriteFailureCount += 1
+            recordStorageError(error)
             Self.fallbackLogger.error(
                 "Could not persist diagnostic event: \(String(reflecting: error), privacy: .private)"
+            )
+            return
+        }
+        pruneOldFilesAfterWrite()
+    }
+
+    func appendMetricKitReport(_ rawJSON: Data) {
+        ioQueue.async { [weak self] in
+            self?.appendMetricKitReportOnQueue(rawJSON)
+        }
+    }
+
+    private func appendMetricKitReportOnQueue(_ rawJSON: Data) {
+        do {
+            let safeJSON = try DiagnosticRedactor.safeJSON(
+                rawJSON,
+                maximumBytes: Self.maximumMetricKitReportBytes
+            )
+            let reportID = SHA256.hash(data: safeJSON)
+                .map { String(format: "%02x", $0) }
+                .joined()
+            let reportURL = metricKitReportURL(id: reportID)
+            guard !fileManager.fileExists(atPath: reportURL.path) else {
+                DiagnosticLogger.record(
+                    .debug,
+                    category: .diagnostics,
+                    event: "metrickit.diagnostic.duplicate.skipped",
+                    message: "相同的脱敏 MetricKit 报告已保存，跳过重复文件",
+                    metadata: ["reportID": String(reportID.prefix(16))]
+                )
+                return
+            }
+
+            try ensureDirectory()
+            try safeJSON.write(to: reportURL, options: .atomic)
+            DiagnosticMetricKitFileAttributes.protectAndExcludeFromBackup(reportURL)
+            DiagnosticLogger.record(
+                .info,
+                category: .diagnostics,
+                event: "metrickit.diagnostic.persisted",
+                message: "脱敏 MetricKit 诊断报告已保存到本机",
+                metadata: [
+                    "reportID": String(reportID.prefix(16)),
+                    "reportBytes": String(safeJSON.count),
+                ]
+            )
+            pruneOldFilesAfterWrite()
+        } catch {
+            storageHealth.metricKitWriteFailureCount += 1
+            recordStorageError(error)
+            Self.fallbackLogger.error(
+                "Could not persist MetricKit diagnostic report: \(String(reflecting: error), privacy: .private)"
+            )
+            DiagnosticLogger.record(
+                .error,
+                category: .storage,
+                event: "metrickit.diagnostic.persist.failed",
+                message: "处理或保存 MetricKit 诊断报告失败",
+                error: error,
+                metadata: ["rawReportBytes": String(rawJSON.count)]
             )
         }
     }
@@ -320,37 +581,90 @@ final class DiagnosticLogStore: @unchecked Sendable {
 
     private func snapshotOnQueue() throws -> DiagnosticLogSnapshot {
         guard fileManager.fileExists(atPath: directoryURL.path) else {
-            return DiagnosticLogSnapshot(events: [], storageBytes: 0, corruptedLineCount: 0)
+            return DiagnosticLogSnapshot(
+                events: [],
+                metricKitReports: [],
+                storageBytes: 0,
+                corruptedLineCount: 0,
+                storageHealth: storageHealth
+            )
         }
 
-        try pruneOldFiles(now: Date())
+        do {
+            try pruneOldFiles(now: Date())
+        } catch {
+            storageHealth.maintenanceFailureCount += 1
+            recordStorageError(error)
+            Self.fallbackLogger.error(
+                "Could not prune diagnostic files: \(String(reflecting: error), privacy: .private)"
+            )
+        }
         let files = try logFiles()
+        let reportFiles = try metricKitReportFiles()
         var events: [DiagnosticLogEvent] = []
+        var metricKitReports: [DiagnosticMetricKitReport] = []
         var storageBytes = 0
         var corruptedLineCount = 0
 
         for url in files {
-            let data = try Data(contentsOf: url, options: [.mappedIfSafe])
-            storageBytes += data.count
-            guard let contents = String(data: data, encoding: .utf8) else {
-                corruptedLineCount += 1
-                continue
-            }
-            for line in contents.split(whereSeparator: \.isNewline) {
-                guard let lineData = String(line).data(using: .utf8) else { continue }
-                do {
-                    events.append(try decoder.decode(DiagnosticLogEvent.self, from: lineData))
-                } catch {
+            do {
+                let data = try Data(contentsOf: url, options: [.mappedIfSafe])
+                storageBytes += data.count
+                guard let contents = String(data: data, encoding: .utf8) else {
                     corruptedLineCount += 1
+                    continue
                 }
+                for line in contents.split(whereSeparator: \.isNewline) {
+                    guard let lineData = String(line).data(using: .utf8) else { continue }
+                    do {
+                        events.append(try decoder.decode(DiagnosticLogEvent.self, from: lineData))
+                    } catch {
+                        corruptedLineCount += 1
+                        recordStorageError(error)
+                    }
+                }
+            } catch {
+                corruptedLineCount += 1
+                recordStorageError(error)
             }
         }
 
-        events.sort { $0.timestamp > $1.timestamp }
+        for url in reportFiles {
+            do {
+                let data = try Data(contentsOf: url, options: [.mappedIfSafe])
+                storageBytes += data.count
+                let payload = try decoder.decode(DiagnosticJSONValue.self, from: data)
+                metricKitReports.append(
+                    DiagnosticMetricKitReport(
+                        id: url.deletingPathExtension().lastPathComponent
+                            .replacingOccurrences(of: "diagnostics-metrickit-", with: ""),
+                        reportType: "MXDiagnosticPayload",
+                        receivedAt: modificationDate(of: url),
+                        byteCount: data.count,
+                        summary: payload.diagnosticSummary,
+                        payload: payload
+                    )
+                )
+            } catch {
+                corruptedLineCount += 1
+                recordStorageError(error)
+            }
+        }
+
+        events.sort {
+            if $0.timestamp != $1.timestamp { return $0.timestamp > $1.timestamp }
+            if $0.processSessionID == $1.processSessionID {
+                return ($0.sequenceNumber ?? 0) > ($1.sequenceNumber ?? 0)
+            }
+            return $0.id.uuidString > $1.id.uuidString
+        }
+        metricKitReports.sort { $0.receivedAt > $1.receivedAt }
         return DiagnosticLogSnapshot(
             events: events,
+            metricKitReports: metricKitReports,
             storageBytes: storageBytes,
-            corruptedLineCount: corruptedLineCount
+            corruptedLineCount: corruptedLineCount,
+            storageHealth: storageHealth
         )
     }
 
@@ -362,9 +676,10 @@ final class DiagnosticLogStore: @unchecked Sendable {
 
     private func clearOnQueue() throws {
         guard fileManager.fileExists(atPath: directoryURL.path) else { return }
-        for url in try logFiles() {
+        for url in try diagnosticFiles() {
             try fileManager.removeItem(at: url)
         }
+        storageHealth = DiagnosticStorageHealth()
         try createCurrentFile()
     }
 
@@ -375,6 +690,10 @@ final class DiagnosticLogStore: @unchecked Sendable {
 
     private var currentFileURL: URL {
         directoryURL.appendingPathComponent(Self.currentFileName)
+    }
+
+    private func metricKitReportURL(id: String) -> URL {
+        directoryURL.appendingPathComponent("diagnostics-metrickit-\(id).json")
     }
 
     private func ensureDirectory() throws {
@@ -446,17 +765,37 @@ final class DiagnosticLogStore: @unchecked Sendable {
         .sorted { modificationDate(of: $0) < modificationDate(of: $1) }
     }
 
+    private func metricKitReportFiles() throws -> [URL] {
+        try fileManager.contentsOfDirectory(
+            at: directoryURL,
+            includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey],
+            options: [.skipsHiddenFiles]
+        )
+        .filter {
+            $0.pathExtension == "json"
+                && $0.lastPathComponent.hasPrefix("diagnostics-metrickit-")
+        }
+        .sorted { modificationDate(of: $0) < modificationDate(of: $1) }
+    }
+
+    private func diagnosticFiles() throws -> [URL] {
+        try logFiles() + metricKitReportFiles()
+    }
+
     private func modificationDate(of url: URL) -> Date {
         (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
     }
 
     private func pruneOldFiles(now: Date) throws {
-        var files = try logFiles()
+        var files = try diagnosticFiles()
         let cutoff = now.addingTimeInterval(-Self.retentionInterval)
         for url in files where modificationDate(of: url) < cutoff {
+            let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
             try fileManager.removeItem(at: url)
+            storageHealth.prunedFileCount += 1
+            storageHealth.prunedByteCount += size
         }
-        files = try logFiles()
+        files = try diagnosticFiles()
 
         var totalBytes = try files.reduce(into: 0) { total, url in
             let values = try url.resourceValues(forKeys: [.fileSizeKey])
@@ -466,9 +805,30 @@ final class DiagnosticLogStore: @unchecked Sendable {
               let oldest = files.first(where: { $0 != currentFileURL }) {
             let size = (try? oldest.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
             try fileManager.removeItem(at: oldest)
+            storageHealth.prunedFileCount += 1
+            storageHealth.prunedByteCount += size
             totalBytes -= size
             files.removeAll { $0 == oldest }
         }
+    }
+
+    private func pruneOldFilesAfterWrite() {
+        do {
+            try pruneOldFiles(now: Date())
+        } catch {
+            storageHealth.maintenanceFailureCount += 1
+            recordStorageError(error)
+            Self.fallbackLogger.error(
+                "Could not prune diagnostic files: \(String(reflecting: error), privacy: .private)"
+            )
+        }
+    }
+
+    private func recordStorageError(_ error: Error) {
+        let value = error as NSError
+        storageHealth.lastErrorDomain = DiagnosticRedactor.redact(value.domain, limit: 200)
+        storageHealth.lastErrorCode = value.code
+        storageHealth.lastErrorMessage = DiagnosticRedactor.redact(value.localizedDescription, limit: 1_024)
     }
 }
 
@@ -485,6 +845,8 @@ private struct DiagnosticExportManifest: Encodable {
     let newestEvent: Date?
     let logStorageBytes: Int
     let corruptedLineCount: Int
+    let metricKitReportCount: Int
+    let storageHealth: DiagnosticStorageHealth
 }
 
 private struct DiagnosticExportError: Encodable {
@@ -541,6 +903,7 @@ private struct DiagnosticExportBundle: Encodable {
     let manifest: DiagnosticExportManifest
     let events: [DiagnosticLogEvent]
     let syncRuns: [DiagnosticExportRun]
+    let metricKitDiagnostics: [DiagnosticMetricKitReport]
 }
 
 enum DiagnosticLogExporter {
@@ -548,12 +911,12 @@ enum DiagnosticLogExporter {
         syncRuns: [SyncRunRecord],
         deviceModel: String,
         systemVersion: String
-    ) throws -> (url: URL, eventCount: Int, byteCount: Int) {
+    ) throws -> (url: URL, eventCount: Int, reportCount: Int, byteCount: Int) {
         let snapshot = try DiagnosticLogStore.shared.snapshot()
         let info = Bundle.main.infoDictionary ?? [:]
         let bundle = DiagnosticExportBundle(
             manifest: DiagnosticExportManifest(
-                schemaVersion: 1,
+                schemaVersion: 2,
                 generatedAt: Date(),
                 bundleIdentifier: Bundle.main.bundleIdentifier ?? "com.healthmi.HealthMi",
                 appVersion: info["CFBundleShortVersionString"] as? String ?? "unknown",
@@ -564,10 +927,13 @@ enum DiagnosticLogExporter {
                 oldestEvent: snapshot.oldestEvent,
                 newestEvent: snapshot.newestEvent,
                 logStorageBytes: snapshot.storageBytes,
-                corruptedLineCount: snapshot.corruptedLineCount
+                corruptedLineCount: snapshot.corruptedLineCount,
+                metricKitReportCount: snapshot.metricKitReports.count,
+                storageHealth: snapshot.storageHealth
             ),
             events: snapshot.events,
-            syncRuns: syncRuns.map(DiagnosticExportRun.init)
+            syncRuns: syncRuns.map(DiagnosticExportRun.init),
+            metricKitDiagnostics: snapshot.metricKitReports
         )
 
         let encoder = JSONEncoder()
@@ -590,7 +956,7 @@ enum DiagnosticLogExporter {
             ofItemAtPath: url.path
         )
         DiagnosticLogFileAttributes.excludeFromBackup(url)
-        return (url, snapshot.events.count, data.count)
+        return (url, snapshot.events.count, snapshot.metricKitReports.count, data.count)
     }
 
     private static func removeExpiredExports(in directory: URL) {

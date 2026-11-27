@@ -27,21 +27,22 @@
 - Create: `docs/superpowers/plans/2026-11-27-diagnostic-logging-metrickit.md`
 
 - [x] 记录设计决定、代码范围、分阶段验收和官方 MetricKit API 限制。
-- [ ] Commit: `docs: plan MetricKit diagnostic logging`
+- [x] Commit: `docs: plan MetricKit diagnostic logging` (`d07ec25`)
 
 ## Task 2: 增强事件上下文与日志存储状态
 
 **Files:**
 - Modify: `HealthMi/Support/DiagnosticLogging.swift`
+- Create: `HealthMi/Support/MetricKitDiagnostics.swift` (JSON payload model and storage-facing report type)
 
-- [ ] 给 `DiagnosticLogEvent` 增加可选字段 `processSessionID`, `sequenceNumber`, `sourceFile`, `sourceFunction`, `sourceLine`, `errorChain`。新字段可选以兼容此前 JSONL 行；旧记录不重写。
-- [ ] 给 `DiagnosticLogger.record` 增加调用点默认参数 `file: String = #fileID`, `function: String = #function`, `line: UInt = #line`。由线程安全序号器生成进程级 UUID 与递增序号，记录 PID、线程标志仍保留。
-- [ ] 新增可编码的错误详情类型，沿 `NSUnderlyingErrorKey` 读取最多 5 层，仅保存经过脱敏的 domain、code 和 localized description；检测重复 NSError 身份以避免循环。
-- [ ] 增加 MetricKit JSON 的递归隐私过滤：剔除敏感键，对字符串执行现有 token/Bearer/URL 查询参数规则，拒绝无效 JSON 或超过 8 MiB 的报告，不落盘原始 payload。
-- [ ] 将存储统计限制在本进程启动以来：事件写入失败、MetricKit 写入失败、JSONL 轮转、过期/容量清理的文件数与字节数、最近错误域/码。统计在串行 I/O 队列内更新，写入失败同时走 fallback `os.Logger`，不能中断业务路径。
-- [ ] 将 MetricKit JSON 文件纳入共享的 20 MiB / 14 天保留策略；每份不超过 8 MiB，去重以脱敏 JSON 的 SHA-256 为键。保留 JSONL 每文件 2 MiB 上限。清空操作移除 JSONL 与 MetricKit 报告。
-- [ ] 更新快照使其包含总存储字节数、损坏记录数、存储健康统计和可读 MetricKit 报告；snapshot、append、clear、prune 均继续串行化，保留旧 JSONL 解码行为。
-- [ ] 完成代码静态检查后 Commit: `feat: enrich diagnostic event context and storage health`
+- [x] 给 `DiagnosticLogEvent` 增加可选字段 `processSessionID`, `sequenceNumber`, `sourceFile`, `sourceFunction`, `sourceLine`, `errorChain`。新字段可选以兼容此前 JSONL 行；旧记录不重写。
+- [x] 给 `DiagnosticLogger.record` 增加调用点默认参数 `file: String = #fileID`, `function: String = #function`, `line: UInt = #line`。由线程安全序号器生成进程级 UUID 与递增序号，记录 PID、线程标志仍保留。
+- [x] 新增可编码的错误详情类型，沿 `NSUnderlyingErrorKey` 读取最多 5 层，仅保存经过脱敏的 domain、code 和 localized description；检测重复 NSError 身份以避免循环。
+- [x] 增加 MetricKit JSON 的递归隐私过滤：剔除敏感键，对字符串执行现有 token/Bearer/URL 查询参数规则，拒绝无效 JSON 或超过 8 MiB 的报告，不落盘原始 payload。
+- [x] 将存储统计限制在本进程启动以来：事件写入失败、MetricKit 写入失败、清理维护失败、JSONL 轮转、过期/容量清理的文件数与字节数、最近错误域/码/脱敏说明。统计在串行 I/O 队列内更新，写入失败同时走 fallback `os.Logger`，不能中断业务路径。
+- [x] 将 MetricKit JSON 文件纳入共享的 20 MiB / 14 天保留策略；每份不超过 8 MiB，去重以脱敏 JSON 的 SHA-256 为键。保留 JSONL 每文件 2 MiB 上限。清空操作移除 JSONL 与 MetricKit 报告。
+- [x] 更新快照使其包含总存储字节数、损坏记录数、存储健康统计和可读 MetricKit 报告；snapshot、append、clear、prune 均继续串行化，保留旧 JSONL 解码行为。
+- [x] 完成代码静态检查后 Commit: `feat: enrich diagnostic event context and storage health`
 
 ## Task 3: 接入 iOS 16 MetricKit 报告
 
