@@ -1800,3 +1800,53 @@ Python zipfile 对两个 IPA 和 dSYM ZIP 的 CRC 完整性检查全部通过。
 #### 验证边界
 
 run 成功证明该源码可以在指定 GitHub runner 上构建，并证明下载包的静态结构与配置。当前 Windows 主机没有 Xcode；本轮没有运行测试套件或 Simulator，也没有安装 build 5 到 iOS 16.3 真机。因此尚不能确认 MetricKit 是否在设备上实际投递过报告，也不能确认 Shortcuts runtime 是否会在设备的“添加操作”界面展示“查询同步状态”。这两项需要安装此 build 后分别做设备验证。
+
+### 9.32 build 5 快捷指令运行 7CE7FFB2：后台任务未进入同步处理器（2026-11-27）
+
+本节关联用户提供的应用诊断日志与 `D:\debug\shortcut-debug-5.jsonl` 系统日志。原始设备日志不复制进仓库，只保留可复核的时间、运行 ID、事件和代码路径摘要。
+
+#### 日志时间线与结论
+
+运行 ID 为 `7CE7FFB2-501F-4A4C-8400-831831CB4BDC`，记录中的 `queuedAtEpochSeconds=1795761153` 换算为上海时间 **2026-11-27 14:32:33**。
+
+| 上海时间 | 证据 | 能证明什么 |
+|---|---|---|
+| 14:36:14 | `shortcut.sync.perform.reused_active_run` 记录同一运行仍为 `queued`，队列年龄 221 秒；随后 `queued_reschedule_attempted` 记为 `scheduledImmediately=true`。约 15 毫秒后 Intent 返回，分支为 `reused_queued`。 | 快捷指令复用了 14:32 创建的旧队列，没有开始同步，也没有新建运行。 |
+| 14:36:14.889 | 系统日志出现 `submitTaskRequest: BGAppRefreshTaskRequest`，标识 `com.healthmi.HealthMi.sync`，`earliestBeginDate` 为 14:36:15（上海时间）。 | iOS 接受了一个最早可在该时刻运行的请求；这不是任务已经启动的证据。 |
+| 14:36:17 | `shortcut.status_query.completed` 读取到相同运行仍是 `queued`，队列年龄 223 秒。 | 查询状态快捷指令只读到了持久化队列状态；没有改变任务状态，也没有执行同步。 |
+| 应用日志覆盖 14:36:10 至 14:38:24 | 252 条记录里没有 `background.handler.started`、`background.run.claimed`、`sync.run.started`、`sync.type.started`、`sync.engine.type.started` 或 `healthkit.samples.save.*`。 | 在所提供的应用日志范围内，没有证据显示后台处理器启动、云端数据处理或 HealthKit 写入曾开始。 |
+
+因此，能由日志支持的判断是：**这次快捷指令成功完成了排队和调度请求提交，但没有证据表明它完成了健康数据同步；你在同步历史看到“已排队”与日志完全一致。**系统日志和应用日志的截取范围有限，不能据此证明 iOS 此后永远不会运行该请求；但截至日志结束，它仍没有启动证据。也没有本次运行对应的小米网络、登录、解析、HealthKit 权限或 HealthKit 写入错误，因为执行流程尚未进入这些阶段。
+
+应用日志中的 17 条 `HKQuantityTypeIdentifierHeartRateVariabilitySDNN` 错误均来自 `HealthKitReader.statistics(for:predicate:options:)`，`run=-`，系统说明为指定条件下没有数据。这些是仪表盘读取汇总统计时的读查询结果，不是本次运行的 HealthKit 写入错误，也不足以单独证明写入权限被拒绝。
+
+#### 源码调用链与卡在 queued 的原因
+
+1. `SyncHealthDataIntent.perform()` 调用 `SyncRunStore.active()`。发现活动运行是 `queued` 后，它复用原 run ID，并调用 `BackgroundSync.scheduleFromIntentIfRegistered(immediate: true)`；最后返回无值的 `.result()`。因此 Shortcuts 的动作完成只代表 Intent 正常返回，不代表数据同步成功。
+2. `immediate: true` 把 `BGAppRefreshTaskRequest.earliestBeginDate` 设成约一秒后。Apple 对该字段的定义是“不早于此时间运行”，不保证到点启动；Apple 的后台任务开发说明明确指出，提交请求后系统实际启动 App 的延迟可能达到数小时。系统日志中的 `submitTaskRequest` 只证明请求被接收。
+3. 真正执行同步的代码在 BGTask handler：任务被系统交付后，HealthMi 才会领取运行、准备 Core Data、创建后台 `AppModel`，然后调用 `syncAll`。此次日志没有 handler/claim/run 事件，所以不能将失败归咎于凭据、云端 API 或 HealthKit。
+4. 当前前台兜底也没有执行队列：启动准备阶段检测到 queued run 时，只调用 `BackgroundSync.schedule(immediate: hasQueuedRun)`；`scenePhase` 改为 active 时只记录状态变化。两处都没有调用 `syncAll` 来消费该 queued run。用户重新打开 App 后仍可能只看到排队状态。
+5. `SyncRunStore` 将 queued 记录保留 24 小时后才在后续状态查询/领取调用中标为 stale。再次运行“同步健康数据”会再次发现并重调度原 queued run，不会强制同步，也不会重置其创建时间。
+
+#### “同步健康数据”究竟执行增量还是回填
+
+该快捷指令本身只负责创建或复用排队记录并请求 BGTask；只有 BGTask handler 被 iOS 启动后才调用通用 `AppModel.syncAll`。该调用没有传 `forceBackfill: true`，因此走普通游标同步：
+
+- 有该类型的同步游标时，从上次游标向前重叠一天开始拉取，避免遗漏迟到数据；之后按 `externalUUID` 去重写入。
+- 某一类型尚无游标时，普通同步会按 `backfillDays` 做首次拉取；后台新建 `AppModel` 的默认值为 30 天。这属于首次初始化，不等于每次快捷指令都重新回填。
+- 只有主界面“重新回填”按钮传入 `forceBackfill: true`，才忽略游标并按所选天数重拉/重写。
+- 压力数据存入 HealthMi 的 Core Data，源码明确没有对应的 HealthKit 类型；其他启用类型才通过 HealthKit 写入。
+
+主界面的“立即增量同步”会直接调用 `syncAll`，不等待 BGTask，因此可以用来立即执行真实同步。当前这个按钮没有把快捷指令已有的 queued run ID 传给该次同步，所以手动同步可能成功写入数据，但同步历史里的 `7CE7FFB2` 仍保持 queued，形成“数据已写入、快捷指令运行仍排队”的状态不一致。
+
+#### 修复建议
+
+优先修复队列消费与状态语义，保留 BGTask 作为系统允许时的后台兜底：
+
+1. 抽出唯一的待运行任务执行入口。App 进入前台且数据库准备完成后，若发现 queued run，就用原 run ID 在前台执行 `syncAll(forceBackfill: false)`；不可只再次提交 BGTask。
+2. 让前台恢复与 BGTask 共用同一套原子认领及状态转换：执行前立即将该 run 从 queued 改成 running 并保存 owner/时间；第二个入口发现已被认领时不得重复执行。当前 `claimForBackground` 返回 `shouldRun` 后由另一条调用再 `markRunning`，且状态保存在 UserDefaults；新增前台消费者时必须同时处理两个入口的竞态，不能只增加一个 `scenePhase` 回调。
+3. 同步成功、部分失败、失败、取消或系统过期都要把同一个 run ID 更新到明确终态。前台手动执行已有 queued run 时也复用该 ID，避免实际数据已同步但历史永久显示 queued。
+4. 把快捷指令文案/输出明确为“已排队，尚未确认同步完成”；“查询同步状态”应向 Shortcuts 返回实际状态值，而非当前只记录诊断日志后返回空结果。用户需要确定性立即完成时，提供打开 App 并在前台执行的路径；BGAppRefresh 不能承诺即时运行。
+5. 在设备日志中验收同一 run ID 的完整链条：`background.handler.started` 或前台消费事件 → run claimed/running → `sync.run.started` → 每类 `sync.engine.type.started` / fetch/HealthKit save → `sync.run.completed` 终态。单看 shortcut action 成功、`submitTaskRequest`、或 `earliestBeginDate` 到时都不能视为同步成功。
+
+这次仅完成日志与源码分析，未修改同步实现。Apple 官方参考：[`BGTaskRequest.earliestBeginDate`](https://developer.apple.com/documentation/backgroundtasks/bgtaskrequest/earliestbegindate)；[在开发中启动与终止后台任务](https://developer.apple.com/documentation/backgroundtasks/starting-and-terminating-tasks-during-development)。
