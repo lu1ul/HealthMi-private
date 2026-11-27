@@ -1859,7 +1859,7 @@ run 成功证明该源码可以在指定 GitHub runner 上构建，并证明下�
 
 #### 可行性判断
 
-可以把 App Intent 改为在 `perform()` 中直接调用现有同步流程并 `await` 到运行结束。HealthMi 当前 `SyncHealthDataIntent` 已声明 `openAppWhenRun = false`；这表示该动作可以在 App 不处于前台时被系统考虑执行。App Intent 的 `perform()` 本来就是执行动作并把结果返回系统的入口，因此可以在动作内准备 Core Data、读取已保存凭据、调用 `AppModel.syncAll(forceBackfill: false, runID:)`，完成后才返回同步结果。
+技术上可以把 App Intent 改为在 `perform()` 中直接调用增量同步并等待结果；`openAppWhenRun = false` 允许动作在 App 不处于前台时执行，无需用户先手动打开界面。不过这并不代表把当前队列逻辑简单替换为 `await AppModel.syncAll(...)` 就会可靠：本项目以前已经尝试在帮助进程中等待多类型完整同步，遇到过“无法与帮助程序通信”。
 
 这表示用户无需预先打开 App，也无需让它留在多任务切换器中等待；iOS 会在后台启动承载 Intent 的执行上下文。它不表示“没有任何 HealthMi 代码进程运行”：必须有某个进程执行同步代码。当前 Intent 位于主 App target；如果严格要求主 App 二进制完全不启动，可研究 App Intents extension，但仍会有扩展进程执行，并增加共享代码、存储、Keychain 和 HealthKit entitlement 配置面。
 
@@ -1867,22 +1867,24 @@ run 成功证明该源码可以在指定 GitHub runner 上构建，并证明下�
 
 直接执行比 BGTask 更符合“快捷指令结束前完成同步”的语义，但不能承诺任意长任务都完成。Apple 当前 App Intents 文档说明，后台 Intent 通常只有约 30 秒；Apple 在 WWDC26 中介绍的 `LongRunningIntent` 用来延长该时限，但该场次明确将这些能力定位为 **2027 年版本**更新。因此截至 2026-11-27，不能把 `LongRunningIntent` 当成用户 iOS 16.3 设备可用的方案。
 
-日常增量量较小、各类型游标已建立时，可先让 Intent 直接执行并在真实 iOS 16.3 设备测量耗时；首次同步或大范围回填可能超过短时限，应保留分类型游标、取消处理和可重试语义。每类成功后保存游标、HealthKit 写入按 external UUID 幂等的现有结构有利于续跑，但仍需确认中途取消时运行记录不会被错误标成成功。
+相关历史证据见本报告 9.14 与 9.15：旧版 `perform()` 在 `openAppWhenRun = false` 下等待完整同步，应用自设 watchdog 为 55 秒，单次网络请求可等待 30 秒，另有退避重试、分页、最多九类同步和 HealthKit 去重/摘要查询。用户遇到过帮助程序通信错误；当时分析认为进程时限或通信超时概率最高，但缺少足以确认具体终止点的 Shortcut/App Intents 系统日志。因此，历史记录证明“长链路直接执行已经不稳定”，但没有证明“所有短增量 Intent 都必然失败”。
+
+要让直接执行有机会稳定，快捷指令路径需要专门限时：只处理已有游标的增量数据，避免 `syncAll` 结束后刷新仪表盘摘要或发无关通知，逐类型记录进度和游标，及时响应取消，并把每次运行控制在实测的系统时间预算内。常规日增量可能较小，但必须用用户的 iOS 16.3 真机对真实数据量测量；首次同步、需要回填或网络慢/重试时仍可能超时。分类型游标和 HealthKit external UUID 去重有助于下次重试续跑，但不能让当前快捷指令等到 BGTask 执行。
 
 #### 推荐实施方向
 
-1. 把“同步健康数据”改为直接执行普通增量同步；快捷指令不再把 BGAppRefresh 当作同步成功的必要路径。BGTask 可以继续承担系统择时的周期刷新。
-2. 在 `perform()` 开始时把运行记录置为 running；用既有数据库、凭据与 `AppModel.syncAll(forceBackfill: false)` 执行，等待每类结果和 HealthKit 保存完成。
+1. 将直接执行作为有时间预算的专项实现，而不是直接搬回 9.14 的多类型完整同步。先测量每日增量各类耗时，压缩 Intent 内非必要工作；若全类型仍超过设备可用时间，需限制本次范围或拆分运行。
+2. 在 `perform()` 开始时把运行记录置为 running；等待直接增量路径及 HealthKit 保存结果，只有写入完成后才返回成功。BGTask 可继续承担系统择时的周期刷新，但不能被当作本次快捷指令已完成的证明。
 3. 捕获系统取消/超时，保存已完成类型的结果和游标，未完成部分标为可重试；快捷指令必须返回明确成功、部分失败、失败或取消状态，不能排队后就显示成功。
 4. 要求 HealthKit 写入授权和小米凭据已预先配置。后台运行时若还需要首次显示授权界面或用户交互，Intent 不应假报同步成功，应返回需要先在 App 中完成设置的清楚错误。
-5. 用 iOS 16.3 真机验证从未打开 App、App 已退出、网络较慢、无新数据、部分数据失败和超时续跑；成功标准是同一 run ID 的 Intent 等待到同步终态，并能在健康 App 查到写入数据。日志应记录真实耗时、每类 fetched/added 数、HealthKit 保存成功/失败及最终状态。
+5. 用 iOS 16.3 真机验证 App 未预先运行、单类轻量增量、全类型日常增量、网络较慢、无新数据、部分数据失败和超时续跑。只有当常规增量可在实际系统时限内完成，且 Shortcuts 收到同一 run ID 的正确终态、健康 App 可查到写入数据，才可判定满足目标；长任务仍需明确报告系统限制。
 
 #### 备选方案比较
 
 | 路线 | 不需要手动打开 App | 快捷指令返回时可确认写入完成 | 适配 iOS 16.3 | 结论 |
 |---|---|---|---|---|
-| Intent 内直接等待增量同步 | 是；系统在后台运行 Intent | 同步在短执行时限内完成时可以 | 可以，但必须做好取消/续跑并实机验证 | **推荐** |
+| Intent 内直接等待增量同步 | 是；不要求手动打开 UI 或预先常驻 | 仅当工作能在系统时限内完成时可以 | 可以，但本项目以前的全量直接路线已出现帮助程序通信错误，必须优化并真机验证 | **唯一符合“动作返回时已完成”的可试路线，但不保证长任务** |
 | BGAppRefresh 快速排队 | 是 | 否；系统选择实际启动时间 | 可以 | 保留为周期后台刷新，不作为快捷指令即时完成机制 |
-| 依赖 `LongRunningIntent` 延长时限 | 是 | 可等待长任务 | Apple 在 2027 更新中介绍，不能用于 iOS 16.3 | 未来系统版本再评估 |
+| 依赖 `LongRunningIntent` 延长时限 | 是 | 可等待长任务 | Apple 在 2027 更新中介绍，当前不能用于 iOS 16.3 | 未来系统版本再评估 |
 
 Apple 官方资料：[`AppIntent.perform()`](https://developer.apple.com/documentation/appintents/appintent/perform())；[`AppIntent.openAppWhenRun`](https://developer.apple.com/documentation/appintents/appintent/openappwhenrun)；[配置 App Intent 前台/后台运行方式](https://developer.apple.com/documentation/appintents/configuring-the-runtime-behavior-of-your-app-intents)；[`LongRunningIntent`](https://developer.apple.com/documentation/appintents/longrunningintent)；[WWDC26：App Intents 2027 更新与运行时限](https://developer.apple.com/videos/play/wwdc2026/345/)。本节记录的是可行性与推荐方向，尚未修改代码或建立正式实施设计。
