@@ -235,20 +235,17 @@ struct DashboardView: View {
                 }
 
                 Section {
-                    ShortcutsLink {
-                        DiagnosticLogger.record(
-                            .info,
-                            category: .appIntent,
-                            event: "shortcut.discovery.link.tapped",
-                            message: "用户请求从 HealthMi 打开系统快捷指令页面"
-                        )
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label("在快捷指令中添加 HealthMi", systemImage: "plus.app")
+                            .font(.headline)
+                        Text("打开快捷指令 App，点击“＋”→“添加操作”，搜索 HealthMi，然后选择“同步健康数据”。")
+                        Text("如果列表中没有“查询同步状态”，可在 HealthMi 的同步历史中查看最近运行状态。")
+                            .foregroundStyle(.secondary)
                     }
-                    .shortcutsLinkStyle(.automaticOutline)
-                    .accessibilityLabel("打开快捷指令中的 HealthMi 页面")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 4)
                 } header: {
                     Text("快捷指令")
-                } footer: {
-                    Text("打开系统快捷指令中的 HealthMi 页面，可添加“同步健康数据”和“查询同步状态”。")
                 }
 
                 Section {

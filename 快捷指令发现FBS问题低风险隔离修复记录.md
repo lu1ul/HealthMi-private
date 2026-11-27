@@ -37,8 +37,8 @@
 
 ### 执行状态
 
-- 设计记录：已完成，等待实施。
-- 代码变更：待开始。
+- 设计记录：已完成并提交（`76cc3db`）。
+- 代码变更：已完成并通过 `git diff --check`；`ShortcutsLink` 已替换为添加操作说明，build number 已提升至 4。尚未执行 Xcode 构建。
 - GitHub Actions：待触发。
 - IPA 核验：待完成。
 
