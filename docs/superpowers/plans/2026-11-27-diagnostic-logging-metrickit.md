@@ -76,11 +76,11 @@
 - Modify: `.github/workflows/build-unsigned-ipa.yml`
 - Modify: `CHANGELOG.md`
 
-- [ ] 将 build number 更新为 `5`，保持版本 `1.1.0`、Bundle ID、iOS 16.0 deployment target、现有 unsigned 和 TrollStore IPA 路径。
-- [ ] Release `xcodebuild` 明确启用 `dwarf-with-dsym`，从 `Release-iphoneos/HealthMi.app.dSYM` 生成 `HealthMi-dSYMs.zip`。
-- [ ] 在 workflow 中使用 `dwarfdump --uuid` 提取 app 可执行文件与 dSYM 的架构 UUID 集合，逐架构比较，不匹配则失败；上传独立 dSYM artifact。
-- [ ] 在 changelog 记录日志上下文、MetricKit、本地查看与导出、build 5 的变更；不改变 HealthKit entitlement、TrollStore 签名和快捷指令行为。
-- [ ] 静态核对 workflow 条件、输出路径和 shell 变量后 Commit: `build: archive matching dSYM for diagnostic IPA`
+- [x] 将 build number 更新为 `5`，保持版本 `1.1.0`、Bundle ID、iOS 16.0 deployment target、现有 unsigned 和 TrollStore IPA 路径。
+- [x] Release `xcodebuild` 明确启用 `dwarf-with-dsym`，从 `Release-iphoneos/HealthMi.app.dSYM` 生成 `HealthMi-dSYMs.zip`。
+- [x] 在 workflow 中使用 `dwarfdump --uuid` 提取 app 可执行文件与 dSYM 的架构 UUID 集合，逐架构比较，不匹配则失败；上传独立 dSYM artifact。
+- [x] 在 changelog 记录日志上下文、MetricKit、本地查看与导出、build 5 的变更；不改变 HealthKit entitlement、TrollStore 签名和快捷指令行为。
+- [x] 静态核对 workflow 条件、输出路径和 shell 变量后 Commit: `build: archive matching dSYM for diagnostic IPA`
 
 ## Task 6: 构建、下载、核验与归档记录
 

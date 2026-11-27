@@ -91,14 +91,6 @@ jobs:
           /usr/bin/unzip -Z1 "$ipa_path" | grep -q '^Payload/HealthMi.app/Info.plist$'
           shasum -a 256 "$ipa_path"
 
-      - name: Upload IPA artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: HealthMi-unsigned-ipa
-          path: build/HealthMi-unsigned.ipa
-          if-no-files-found: error
-          retention-days: 7
-
       - name: Create and verify TrollStore HealthKit IPA
         env:
           BUNDLE_IDENTIFIER: ${{ github.event.inputs.bundle_identifier || '' }}
@@ -227,10 +219,13 @@ jobs:
 
           bundle_id=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$verified_app/Info.plist")
           version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$verified_app/Info.plist")
+          build_number=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$verified_app/Info.plist")
+          minimum_os=$(/usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "$verified_app/Info.plist")
           {
             echo "IPA: $(basename "$ipa_path")"
             echo "Bundle ID: $bundle_id"
-            echo "Version: $version"
+            echo "Version: $version ($build_number)"
+            echo "Minimum OS: $minimum_os"
             echo "ldid: $(brew list --versions ldid)"
             echo "LC_CODE_SIGNATURE: present"
             echo "com.apple.developer.healthkit: true"
@@ -250,6 +245,90 @@ jobs:
             echo "Executable SHA-256:"
             shasum -a 256 "$verified_executable"
           } | tee "$report_path"
+
+      - name: Verify and archive matching dSYM
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          build_root="$GITHUB_WORKSPACE/build"
+          source_app="$build_root/DerivedData/Build/Products/Release-iphoneos/HealthMi.app"
+          source_executable="$source_app/HealthMi"
+          dsym_path="$build_root/DerivedData/Build/Products/Release-iphoneos/HealthMi.app.dSYM"
+          dwarf_path="$dsym_path/Contents/Resources/DWARF/HealthMi"
+          trollstore_executable="$build_root/trollstore-verify/Payload/HealthMi.app/HealthMi"
+          unsigned_verify="$build_root/unsigned-verify"
+          unsigned_ipa="$build_root/HealthMi-unsigned.ipa"
+          dsym_zip="$build_root/HealthMi-dSYMs.zip"
+          dsym_report="$build_root/dsym-report.txt"
+
+          test -f "$source_executable"
+          test -f "$trollstore_executable"
+          test -f "$unsigned_ipa"
+          test -f "$dwarf_path"
+          rm -rf "$unsigned_verify"
+          mkdir -p "$unsigned_verify"
+          unzip -q "$unsigned_ipa" -d "$unsigned_verify"
+          unsigned_executable="$unsigned_verify/Payload/HealthMi.app/HealthMi"
+          test -f "$unsigned_executable"
+
+          python3 - "$source_executable" "$unsigned_executable" "$trollstore_executable" "$dwarf_path" <<'PY'
+          import re
+          import subprocess
+          import sys
+
+          def uuids(path):
+              output = subprocess.check_output(["dwarfdump", "--uuid", path], text=True)
+              result = {}
+              for line in output.splitlines():
+                  match = re.match(r"UUID:\s*([0-9A-Fa-f-]+)\s+\(([^)]+)\)", line)
+                  if match:
+                      result[match.group(2)] = match.group(1).upper()
+              if not result:
+                  raise SystemExit(f"No Mach-O UUIDs found: {path}")
+              return result
+
+          source_path, unsigned_path, trollstore_path, symbols_path = sys.argv[1:]
+          symbols = uuids(symbols_path)
+          for label, path in (
+              ("build app", source_path),
+              ("unsigned IPA", unsigned_path),
+              ("TrollStore IPA", trollstore_path),
+          ):
+              actual = uuids(path)
+              if actual != symbols:
+                  raise SystemExit(
+                      f"dSYM UUID mismatch for {label}: app={actual!r}; dSYM={symbols!r}"
+                  )
+              print(f"Verified dSYM UUID match: {label}: {actual}")
+          PY
+
+          ditto -c -k --sequesterRsrc --keepParent "$dsym_path" "$dsym_zip"
+          {
+            echo "dSYM: $(basename "$dsym_zip")"
+            echo "DWARF UUIDs:"
+            dwarfdump --uuid "$dwarf_path"
+            echo "dSYM ZIP SHA-256:"
+            shasum -a 256 "$dsym_zip"
+          } | tee "$dsym_report"
+
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v7
+        with:
+          name: HealthMi-unsigned-ipa
+          path: build/HealthMi-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload matching dSYMs
+        uses: actions/upload-artifact@v7
+        with:
+          name: HealthMi-dSYMs
+          path: |
+            build/HealthMi-dSYMs.zip
+            build/dsym-report.txt
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Upload TrollStore HealthKit IPA
         uses: actions/upload-artifact@v7
