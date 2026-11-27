@@ -50,11 +50,11 @@
 - Create: `HealthMi/Support/MetricKitDiagnostics.swift`
 - Modify: `HealthMi/App/HealthMiApp.swift`
 
-- [ ] 定义 `DiagnosticJSONValue`，支持 object、array、string、number、boolean、null 的 Codable 表示，以便应用内展示及将报告 payload 作为真正的嵌套 JSON 导出，而不是 base64 字符串。
-- [ ] 定义报告模型：稳定 ID、接收时间、字节数、简短摘要、脱敏后的 JSON payload。摘要只展示诊断类别/顶层键和系统报告时间，不解析或展示 HealthKit 数据。
-- [ ] 创建强持有的 `NSObject` + `MXMetricManagerSubscriber` 实例；`HealthMiApp.init()` 记录启动事件后尽早注册 `MXMetricManager.shared.add(_:)`。诊断 payload 回调转为 `Data` 后交给串行存储；每日 metrics 回调不保存、不导出。
-- [ ] 根据部署目标 iOS 16 使用旧版 `MXMetricManagerSubscriber`/`MXDiagnosticPayload.jsonRepresentation()` 兼容 API；不调用 iOS 27+ 专用类型。MetricKit 报告系统投递时间和是否生成由系统决定。
-- [ ] 静态检查 callback 签名、iOS availability、Swift 6 Sendable 边界和存储失败不影响应用启动后 Commit: `feat: persist MetricKit diagnostic reports locally`
+- [x] 定义 `DiagnosticJSONValue`，支持 object、array、string、number、boolean、null 的 Codable 表示，以便应用内展示及将报告 payload 作为真正的嵌套 JSON 导出，而不是 base64 字符串。
+- [x] 定义报告模型：稳定 ID、接收时间、字节数、简短摘要、脱敏后的 JSON payload。摘要只展示诊断类别/顶层键和系统报告时间，不解析或展示 HealthKit 数据。
+- [x] 创建强持有的 `NSObject` + `MXMetricManagerSubscriber` 实例；`HealthMiApp.init()` 记录启动事件后尽早注册 `MXMetricManager.shared.add(_:)`。诊断 payload 回调转为 `Data` 后交给串行存储；每日 metrics 回调不保存、不导出。
+- [x] 根据部署目标 iOS 16 使用旧版 `MXMetricManagerSubscriber`/`MXDiagnosticPayload.jsonRepresentation()` 兼容 API；不调用 iOS 27+ 专用类型。MetricKit 报告系统投递时间和是否生成由系统决定。
+- [x] 静态检查 callback 签名、iOS availability、Swift 6 Sendable 边界和存储失败不影响应用启动后 Commit: `feat: persist MetricKit diagnostic reports locally`
 
 ## Task 4: 增强查看、复制和导出
 

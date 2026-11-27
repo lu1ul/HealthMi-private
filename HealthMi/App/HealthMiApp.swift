@@ -145,6 +145,7 @@ struct HealthMiApp: App {
                 "systemVersion": ProcessInfo.processInfo.operatingSystemVersionString,
             ]
         )
+        MetricKitDiagnosticsSubscriber.shared.start()
         HealthMiShortcuts.updateAppShortcutParameters()
         DiagnosticLogger.record(
             .info,
