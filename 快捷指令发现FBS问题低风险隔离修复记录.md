@@ -38,9 +38,21 @@
 ### 执行状态
 
 - 设计记录：已完成并提交（`76cc3db`）。
-- 代码变更：已完成并通过 `git diff --check`；`ShortcutsLink` 已替换为添加操作说明，build number 已提升至 4。尚未执行 Xcode 构建。
-- GitHub Actions：待触发。
-- IPA 核验：待完成。
+- 代码变更：已完成并提交（`fa086b1`）；`ShortcutsLink` 已替换为添加操作说明，build number 已提升至 4。
+- GitHub Actions：已成功（`lu1ul/HealthMi-private`，运行 `45918462737`，提交 `fa086b1f5fe91427e4d3f37b61db1eab1c6254fc`）。
+- IPA 核验：已完成；两份 IPA 的 build、最低系统版本、ZIP 完整性和双 Intent metadata 检查通过。TrollStore entitlement 由工作流报告和本地下载的验证报告确认。
+- iOS 16.3 真机复测：尚未完成。IPA 检查不能证明系统动作列表会显示“查询同步状态”，也不能证明 FBS Code 5 在设备上已消失。
+
+### Build 4 产物
+
+工作流产物已通过 `gh run download` 下载至 `build/shortcut-build-4-45918462737/`：
+
+| 产物 | 本地文件 | 大小 | SHA-256 |
+|---|---|---:|---|
+| TrollStore HealthKit IPA | `build/shortcut-build-4-45918462737/HealthMi-trollstore-healthkit-ipa/HealthMi-trollstore-healthkit.ipa` | 2,103,181 字节 | `C81EA38C02E06A90DDEF0C2419593E0D7BB8A893866BC79AAE7E3437BB06673A` |
+| Unsigned IPA | `build/shortcut-build-4-45918462737/HealthMi-unsigned-ipa/HealthMi-unsigned.ipa` | 2,043,053 字节 | `CF2846BE9F3253DEE68FB273E56A9438B6213524B367DE30709B7B1271905009` |
+
+两个包均为 `com.healthmi.HealthMi`、版本 `1.1.0`、build `4`、`MinimumOSVersion=16.0`，ZIP 完整性测试通过；均包含 `Metadata.appintents/root.ssu.yaml`，文件中包含 `SyncHealthDataIntent` 和 `QueryLatestSyncStatusIntent`。TrollStore 包的 CI `ldid -e` 校验确认 HealthKit entitlement、TrollStore application/team identifier、Keychain access groups、签名载荷及 HealthKit usage descriptions，且没有 embedded provisioning profile。
 
 ## Apple 官方资料
 

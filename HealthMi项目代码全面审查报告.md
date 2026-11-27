@@ -1735,3 +1735,37 @@ Apple 官方资料：`ShortcutsLink` 用于打开当前 App 在 Shortcuts 中的
 - Apple [`ShortcutsLink`](https://developer.apple.com/documentation/appintents/shortcutslink)：将用户带到当前 App 在快捷指令 App 中的 App Shortcuts 页面。
 - Apple [`AppShortcutsProvider`](https://developer.apple.com/documentation/appintents/appshortcutsprovider)：声明 App 提供的预配置快捷指令。
 - Apple [`BGTaskRequest.earliestBeginDate`](https://developer.apple.com/documentation/backgroundtasks/bgtaskrequest/earliestbegindate)：指定的时间是任务最早可以运行的时间，系统不保证在该时间启动。
+
+### 9.30 build 4：移除快捷指令发现入口并完成 IPA 核验（2026-11-27）
+
+#### 修复方案与代码变更
+
+针对 9.29 节确认的事件顺序，用户选择低风险隔离方案。本版从 `DashboardView` 移除了 `ShortcutsLink`，用静态的“打开快捷指令 App → 点击 + → 添加操作 → 搜索 HealthMi”说明替代，并提示若设备未显示“查询同步状态”，可在 HealthMi 同步历史中查看最近运行状态。
+
+`SyncHealthDataIntent` 和 `QueryLatestSyncStatusIntent` 的定义、`HealthMiShortcuts` 注册及无值 `.result()` 返回方式均未更改。这样保留已经在 iOS 16.3 真机成功返回的快速排队行为，不会因为这次入口隔离改变已验证的 action 返回契约。`CURRENT_PROJECT_VERSION` 从 3 提升到 4。
+
+设计记录为《快捷指令发现FBS问题低风险隔离修复记录.md》。本地提交：设计记录 `76cc3db`；代码和 build number `fa086b1`。代码通过 `git diff --check`；本地 Windows 环境未运行 Xcode，构建由 GitHub Actions 完成。
+
+#### GitHub Actions 构建
+
+提交推送到用户仓库 `lu1ul/HealthMi-private` 的 `main` 分支，未推送到原始 `origin` `ShawnDiego/HealthMi`。GitHub Actions 运行 `45918462737`，commit `fa086b1f5fe91427e4d3f37b61db1eab1c6254fc`，于 2026-11-27 成功完成：Xcode 项目生成、iOS App 编译、unsigned IPA 打包，以及 TrollStore HealthKit IPA 的 entitlement 校验与打包均通过。构建使用 workflow 中的 macOS 15 runner。
+
+#### 下载后的 IPA 检查
+
+通过 `gh run download` 下载至 `build/shortcut-build-4-45918462737/`。本地用 Python `zipfile` 执行完整性检查并读取 IPA 内的 `Info.plist` 和 App Intents metadata：
+
+| 产物 | 本地文件 | 大小 | SHA-256 |
+|---|---|---:|---|
+| TrollStore HealthKit IPA | `build/shortcut-build-4-45918462737/HealthMi-trollstore-healthkit-ipa/HealthMi-trollstore-healthkit.ipa` | 2,103,181 字节 | `C81EA38C02E06A90DDEF0C2419593E0D7BB8A893866BC79AAE7E3437BB06673A` |
+| Unsigned IPA | `build/shortcut-build-4-45918462737/HealthMi-unsigned-ipa/HealthMi-unsigned.ipa` | 2,043,053 字节 | `CF2846BE9F3253DEE68FB273E56A9438B6213524B367DE30709B7B1271905009` |
+
+两个 IPA 的检查结果：
+
+- ZIP 完整性通过。
+- `CFBundleIdentifier=com.healthmi.HealthMi`、`CFBundleShortVersionString=1.1.0`、`CFBundleVersion=4`、`MinimumOSVersion=16.0`。
+- `Payload/HealthMi.app/Metadata.appintents/root.ssu.yaml` 存在，且包含 `SyncHealthDataIntent` 和 `QueryLatestSyncStatusIntent`。
+- TrollStore IPA 随包报告确认 `LC_CODE_SIGNATURE` 存在、`com.apple.developer.healthkit=true`、`application-identifier=TROLLTROLL.*`、team identifier `TROLLTROLL`、`get-task-allow=true`、Keychain access groups `TROLLTROLL.*` 与 `com.apple.token`、HealthKit 读写 usage descriptions 存在，且无 `embedded.mobileprovision`。工作流对打包前和解压后的 IPA 均运行了 ldid entitlement 检查。
+
+#### 验证边界
+
+本次证据证明 build 4 成功构建、IPA 结构和所需 metadata/entitlement 存在；不能证明 iOS 16.3 的系统动作列表会显示“查询同步状态”，也不能证明移除 `ShortcutsLink` 后用户设备的 LinkServices/FBS 错误已消失。原因是本轮没有 iOS 16.3 真机或对应系统 runtime 复测。后续应在 TrollStore 安装 build 4 后分别测试：打开 HealthMi 不再尝试跳转快捷指令页；从快捷指令“添加操作”搜索 HealthMi；检查同步 Intent 是否仍正常返回、查询 Intent 是否出现；同时抓取系统日志确认是否还有 `LNEmbeddedApplicationConnection` / FBS Code 5。即使同步 Intent 在 Shortcuts 中显示成功，也仍需从 HealthMi 同步历史确认 BGTask 是否领取并完成运行。
