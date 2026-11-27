@@ -298,6 +298,22 @@ Apple 官方来源：
 - [`openAppWhenRun`](https://developer.apple.com/documentation/appintents/appintent/openappwhenrun-223b1)
 - [`BGTaskScheduler.register`](https://developer.apple.com/documentation/backgroundtasks/bgtaskscheduler/register%28fortaskwithidentifier%3Ausing%3Alaunchhandler%3A%29)
 
+## 2026-11-27 快捷指令直接增量同步设计
+
+已根据用户要求启动实施：快捷指令将直接调用现有增量同步引擎并等待运行结果，不再把该次动作仅作为 BGAppRefresh 队列请求。Intent 仍不打开前台界面；iOS 会临时启动执行 Intent 所需的后台进程，因此不需要 App 事先运行或常驻后台。
+
+iOS 16 的 App Intent 后台执行受系统时限约束；Apple 文档当前说明可延长后台时间的 `LongRunningIntent` 从 iOS 27 起提供，不能用于最低支持 iOS 16 的构建。设计采用 22 秒应用内预算、快捷路径单请求最多 8 秒、不自动重试、在每个类别之间检查预算，并跳过不必要的 HealthKit 授权请求和仪表盘摘要查询。每类同步已有独立游标，已完成类别先提交；未完成类别不前移游标，后续再次运行可继续/重试。
+
+若没有凭据或需要首次 HealthKit 授权，快捷指令不尝试弹出交互界面，而以明确失败返回。首次无游标类别仍按现有默认回填窗口执行，可能较慢；超出预算时明确报告部分完成。22 秒为实现选择的保护预算，不是 Apple 对 Intent 完成时间的保证。方案、权衡和实施步骤见 `docs/superpowers/specs/2026-11-27-shortcut-direct-incremental-sync-design.md` 与 `docs/superpowers/plans/2026-11-27-shortcut-direct-incremental-sync.md`。
+
+官方资料：
+
+- [Creating your first app intent](https://developer.apple.com/documentation/appintents/creating-your-first-app-intent)
+- [`openAppWhenRun`](https://developer.apple.com/documentation/appintents/appintent/openappwhenrun)
+- [`ReturnsValue`](https://developer.apple.com/documentation/appintents/returnsvalue)
+- [`LongRunningIntent`](https://developer.apple.com/documentation/appintents/longrunningintent)
+- [WWDC26 App Intents 2027 更新](https://developer.apple.com/videos/play/wwdc2026/345/)
+
 ## 2026-11-25 build 3 快捷指令兼容修复记录
 
 ### 代码检查与决定

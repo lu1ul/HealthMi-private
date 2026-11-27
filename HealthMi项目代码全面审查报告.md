@@ -1888,3 +1888,11 @@ run 成功证明该源码可以在指定 GitHub runner 上构建，并证明下�
 | 依赖 `LongRunningIntent` 延长时限 | 是 | 可等待长任务 | Apple 在 2027 更新中介绍，当前不能用于 iOS 16.3 | 未来系统版本再评估 |
 
 Apple 官方资料：[`AppIntent.perform()`](https://developer.apple.com/documentation/appintents/appintent/perform())；[`AppIntent.openAppWhenRun`](https://developer.apple.com/documentation/appintents/appintent/openappwhenrun)；[配置 App Intent 前台/后台运行方式](https://developer.apple.com/documentation/appintents/configuring-the-runtime-behavior-of-your-app-intents)；[`LongRunningIntent`](https://developer.apple.com/documentation/appintents/longrunningintent)；[WWDC26：App Intents 2027 更新与运行时限](https://developer.apple.com/videos/play/wwdc2026/345/)。本节记录的是可行性与推荐方向，尚未修改代码或建立正式实施设计。
+
+### 9.34 快捷指令直接增量同步实施设计（2026-11-27）
+
+用户已明确要求开始实施：运行“同步健康数据”时，不需先打开 HealthMi 或让它预先常驻后台；Intent 需要直接等待增量同步结果。设计与分阶段计划已保存于 `docs/superpowers/specs/2026-11-27-shortcut-direct-incremental-sync-design.md` 和 `docs/superpowers/plans/2026-11-27-shortcut-direct-incremental-sync.md`。
+
+实施路线为 Intent 直接调用现有 `AppModel.syncAll(forceBackfill: false)`，保留每类游标和运行记录，不再把快捷指令本次请求交给 BGAppRefresh。iOS 16 后台 Intent 有执行时限，因此增加总预算和受限网络请求；关闭快捷指令执行中的 HealthKit 授权弹窗和仪表盘摘要刷新。预算耗尽时只能报告部分完成/失败，已完成类别的游标保留供下次运行续接。返回使用 iOS 16 可用的值类型，保持不使用 `ProvidesDialog`。
+
+“无需 App 预先运行”不等于 iOS 无需执行任何 HealthMi 代码：系统会在后台启动 Intent 执行上下文。没有小米登录凭据或预先完成的 HealthKit 授权时，后台快捷指令不能替代首次交互设置。
