@@ -314,6 +314,12 @@ iOS 16 的 App Intent 后台执行受系统时限约束；Apple 文档当前说�
 - [`LongRunningIntent`](https://developer.apple.com/documentation/appintents/longrunningintent)
 - [WWDC26 App Intents 2027 更新](https://developer.apple.com/videos/play/wwdc2026/345/)
 
+### 实施阶段记录
+
+2026-11-27 已实现快捷指令直接执行：`SyncHealthDataIntent` 准备共享 Core Data 后直接等待 `AppModel.syncAll`，使用普通每类型游标，不再依赖 BGAppRefresh 启动本次同步。Shortcuts 返回字符串值，不使用 `ProvidesDialog`。超时/取消与逐类型游标由运行记录报告；同步历史和诊断日志保留状态和错误。
+
+快捷运行预算为 22 秒、单网络请求最多 8 秒、关闭自动重试；跳过 HealthKit 权限弹窗和仪表盘摘要。预算耗尽时停止后续类别，已完成类别游标保留供下次快捷指令续跑。BGAppRefresh 周期刷新仍保留。当前完成的是源代码实现和静态差异/调用点检查；GitHub Release 编译和 IPA 静态核验尚待执行，真机 iOS 16.3 Shortcut runtime 仍不能由 GitHub IPA 构建代替。
+
 ## 2026-11-25 build 3 快捷指令兼容修复记录
 
 ### 代码检查与决定

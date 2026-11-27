@@ -6,6 +6,7 @@ enum MiAPIError: LocalizedError {
     case api(code: Int, message: String?)
     case paginationLimit
     case cursorLoop
+    case executionDeadlineExceeded
     case invalidResponse(String)
     case network(Error)
     case http(Int)
@@ -20,6 +21,8 @@ enum MiAPIError: LocalizedError {
             return "分页超过安全上限"
         case .cursorLoop:
             return "分页游标循环，已终止"
+        case .executionDeadlineExceeded:
+            return "快捷指令执行时间将用尽，已停止启动新的网络请求。"
         case .invalidResponse(let detail):
             return "响应解析失败：\(detail)"
         case .network(let error):
@@ -55,6 +58,49 @@ enum MiAPIError: LocalizedError {
             return false
         }
     }
+
+    var isExecutionDeadlineExceeded: Bool {
+        if case .executionDeadlineExceeded = self { return true }
+        return false
+    }
+}
+
+struct MiRequestPolicy: Sendable {
+    let requestTimeoutInterval: TimeInterval
+    let maxRetries: Int
+    let pageDelayNanoseconds: UInt64
+    let deadline: Date?
+    let safetyMargin: TimeInterval
+
+    static let standard = MiRequestPolicy(
+        requestTimeoutInterval: 30,
+        maxRetries: 3,
+        pageDelayNanoseconds: 200_000_000,
+        deadline: nil,
+        safetyMargin: 0
+    )
+
+    static func shortcut(deadline: Date) -> Self {
+        MiRequestPolicy(
+            requestTimeoutInterval: 8,
+            maxRetries: 0,
+            pageDelayNanoseconds: 200_000_000,
+            deadline: deadline,
+            safetyMargin: 1
+        )
+    }
+
+    func timeoutForNextRequest(now: Date = Date()) throws -> TimeInterval {
+        guard let deadline else { return requestTimeoutInterval }
+        let remaining = deadline.timeIntervalSince(now) - safetyMargin
+        guard remaining > 0 else { throw MiAPIError.executionDeadlineExceeded }
+        return min(requestTimeoutInterval, remaining)
+    }
+
+    func checkDeadline() throws {
+        guard deadline != nil else { return }
+        _ = try timeoutForNextRequest()
+    }
 }
 
 /// 小米健康云数据客户端。Swift 移植自 `mi_fitness_cloud.MiFitnessCloudAdapter`。
@@ -69,11 +115,6 @@ actor MiAPIClient {
     static var regionTimeZone: TimeZone { MiRegion.current.timeZone }
 
 
-    /// 最多重试次数（不含首次请求）。
-    private let maxRetries = 3
-    /// 分页请求间隔（纳秒），避免高频请求触发小米限流。
-    private let pageDelayNs: UInt64 = 200_000_000
-
     private var baseURL: String { MiRegion.current.baseURL }
     private let dataPath = "/app/v1/data/get_fitness_data_by_time"
     private let sportRecordsPath = "/app/v1/data/get_sport_records_by_time"
@@ -82,13 +123,15 @@ actor MiAPIClient {
     private var state: MiSessionState?
     private var diagnosticRunID: UUID?
     private let session: URLSession
+    private let requestPolicy: MiRequestPolicy
 
-    init() {
+    init(requestPolicy: MiRequestPolicy = .standard) {
+        self.requestPolicy = requestPolicy
         let config = URLSessionConfiguration.ephemeral
         // 与 Python 一致：手动管理 Cookie，不交给 URLSession 的存储。
         config.httpCookieStorage = nil
         config.httpShouldSetCookies = false
-        config.timeoutIntervalForRequest = 30
+        config.timeoutIntervalForRequest = requestPolicy.requestTimeoutInterval
         self.session = URLSession(configuration: config)
     }
 
@@ -100,7 +143,11 @@ actor MiAPIClient {
 
     /// 登录并建立会话。
     func connect(userId: String, passToken: String) async throws {
-        self.state = try await MiSessionClient.login(userId: userId, passToken: passToken)
+        self.state = try await MiSessionClient.login(
+            userId: userId,
+            passToken: passToken,
+            requestPolicy: requestPolicy
+        )
     }
 
     // MARK: - 请求签名与发送（对应 Python `_request`）
@@ -124,7 +171,7 @@ actor MiAPIClient {
         dataString: String,
         operation: String
     ) async throws -> [String: Any] {
-        let retries = maxRetries
+        let retries = requestPolicy.maxRetries
         var lastError: Error?
         for attempt in 0...retries {
             if attempt > 0 {
@@ -243,6 +290,7 @@ actor MiAPIClient {
         encrypted["_nonce"] = Data(nonce).base64EncodedString()
 
         var request = URLRequest(url: URL(string: baseURL + path)!)
+        request.timeoutInterval = try requestPolicy.timeoutForNextRequest()
         request.httpMethod = "POST"
         request.setValue(state.cookies, forHTTPHeaderField: "Cookie")
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
@@ -266,6 +314,7 @@ actor MiAPIClient {
                 "method": "POST",
                 "path": path,
                 "attempt": String(attempt),
+                "requestTimeoutMs": String(Int(request.timeoutInterval * 1_000)),
                 "requestBytes": String(request.httpBody?.count ?? 0),
             ]
         )
@@ -476,7 +525,8 @@ actor MiAPIClient {
             seen.insert(cursor!)
             nextKey = cursor
             // 分页请求间隔，避免高频请求触发小米限流
-            try await Task.sleep(nanoseconds: pageDelayNs)
+            try requestPolicy.checkDeadline()
+            try await Task.sleep(nanoseconds: requestPolicy.pageDelayNanoseconds)
         }
         DiagnosticLogger.record(
             .info,
@@ -582,7 +632,8 @@ actor MiAPIClient {
             seen.insert(cursor!)
             nextKey = cursor
             // 分页请求间隔，避免高频请求触发小米限流
-            try await Task.sleep(nanoseconds: pageDelayNs)
+            try requestPolicy.checkDeadline()
+            try await Task.sleep(nanoseconds: requestPolicy.pageDelayNanoseconds)
         }
         DiagnosticLogger.record(
             .info,

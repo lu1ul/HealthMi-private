@@ -35,7 +35,11 @@ enum MiSessionClient {
     /// - Parameters:
     ///   - userId: account.xiaomi.com Cookie 中的 userId
     ///   - passToken: 账号 Cookie 中的 passToken（有效期短，过期后需重新获取）
-    static func login(userId: String, passToken: String) async throws -> MiSessionState {
+    static func login(
+        userId: String,
+        passToken: String,
+        requestPolicy: MiRequestPolicy = .standard
+    ) async throws -> MiSessionState {
         let loginStartedAt = ProcessInfo.processInfo.systemUptime
         DiagnosticLogger.record(
             .info,
@@ -45,6 +49,7 @@ enum MiSessionClient {
             metadata: ["endpointPath": "/pass/serviceLogin"]
         )
         var request = URLRequest(url: URL(string: "https://account.xiaomi.com/pass/serviceLogin?_json=true&sid=miothealth")!)
+        request.timeoutInterval = try requestPolicy.timeoutForNextRequest()
         request.setValue("userId=\(userId); passToken=\(passToken)", forHTTPHeaderField: "Cookie")
 
         let data: Data

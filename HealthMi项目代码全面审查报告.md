@@ -1887,7 +1887,7 @@ run 成功证明该源码可以在指定 GitHub runner 上构建，并证明下�
 | BGAppRefresh 快速排队 | 是 | 否；系统选择实际启动时间 | 可以 | 保留为周期后台刷新，不作为快捷指令即时完成机制 |
 | 依赖 `LongRunningIntent` 延长时限 | 是 | 可等待长任务 | Apple 在 2027 更新中介绍，当前不能用于 iOS 16.3 | 未来系统版本再评估 |
 
-Apple 官方资料：[`AppIntent.perform()`](https://developer.apple.com/documentation/appintents/appintent/perform())；[`AppIntent.openAppWhenRun`](https://developer.apple.com/documentation/appintents/appintent/openappwhenrun)；[配置 App Intent 前台/后台运行方式](https://developer.apple.com/documentation/appintents/configuring-the-runtime-behavior-of-your-app-intents)；[`LongRunningIntent`](https://developer.apple.com/documentation/appintents/longrunningintent)；[WWDC26：App Intents 2027 更新与运行时限](https://developer.apple.com/videos/play/wwdc2026/345/)。本节记录的是可行性与推荐方向，尚未修改代码或建立正式实施设计。
+Apple 官方资料：[`AppIntent.perform()`](https://developer.apple.com/documentation/appintents/appintent/perform())；[`AppIntent.openAppWhenRun`](https://developer.apple.com/documentation/appintents/appintent/openappwhenrun)；[配置 App Intent 前台/后台运行方式](https://developer.apple.com/documentation/appintents/configuring-the-runtime-behavior-of-your-app-intents)；[`LongRunningIntent`](https://developer.apple.com/documentation/appintents/longrunningintent)；[WWDC26：App Intents 2027 更新与运行时限](https://developer.apple.com/videos/play/wwdc2026/345/)。撰写本节时仅记录可行性与推荐方向，尚未修改代码或建立正式实施设计。
 
 ### 9.34 快捷指令直接增量同步实施设计（2026-11-27）
 
@@ -1896,3 +1896,18 @@ Apple 官方资料：[`AppIntent.perform()`](https://developer.apple.com/documen
 实施路线为 Intent 直接调用现有 `AppModel.syncAll(forceBackfill: false)`，保留每类游标和运行记录，不再把快捷指令本次请求交给 BGAppRefresh。iOS 16 后台 Intent 有执行时限，因此增加总预算和受限网络请求；关闭快捷指令执行中的 HealthKit 授权弹窗和仪表盘摘要刷新。预算耗尽时只能报告部分完成/失败，已完成类别的游标保留供下次运行续接。返回使用 iOS 16 可用的值类型，保持不使用 `ProvidesDialog`。
 
 “无需 App 预先运行”不等于 iOS 无需执行任何 HealthMi 代码：系统会在后台启动 Intent 执行上下文。没有小米登录凭据或预先完成的 HealthKit 授权时，后台快捷指令不能替代首次交互设置。
+
+### 9.35 快捷指令直接增量同步代码实现（2026-11-27，待 build 6 构建）
+
+#### 代码行为变更
+
+- `SyncHealthDataIntent.perform()` 不再创建新 queued 运行后提交 BGTask，也不再遇到旧 queued 状态时只重调度。它会复用 queued run ID 或创建 shortcut 运行记录，准备 Core Data 并直接等待 `AppModel.syncAll(forceBackfill: false)` 返回。
+- 仍有 `.running` 运行时返回该记录，不重复同步；旧 queued 记录会被本次 Intent 直接领取。前后台共用静态互斥锁，锁冲突时不会把已经 running 的同一运行误标为失败。
+- 快捷指令结果使用 `ReturnsValue<String>` 返回最终运行摘要与类型级错误，不重新引入历史上已移除的 `ProvidesDialog`。App 内同步历史与诊断日志仍保存完整结果。
+- 新增同步执行上下文区分前台、BGTask 与 Shortcuts。Shortcuts 不弹出 HealthKit 授权界面、不刷新仪表盘趋势/摘要、不触发本次 BGTask 调度；系统周期 BGAppRefresh 保持原逻辑。
+- 快捷路径采用 22 秒应用预算、单个 Xiaomi 请求最多 8 秒、0 次自动重试；URL 请求超时受剩余预算约束，分页继续检查截止时间。预算耗尽时只停止未开始的类别；已完成类别先保存游标，未完成类别不前移，结果为失败/部分失败并提示再次运行。
+- 缺少首次 HealthKit 写入授权时，后台动作不会尝试唤起权限 UI，而记录清晰失败。没有凭据、数据库错误和 Xiaomi 认证错误仍沿用详细错误记录。
+
+#### 验证状态与限制
+
+本机 `git diff --check` 通过；调用点搜索确认 AppModel 前台、BGTask 和 Shortcut 三个入口均使用正确执行上下文，Shortcut Intent 中已无 BGTask 调度调用。当前 Windows 主机没有 Xcode，尚未编译；下一阶段将通过 `personal` 私有仓库的 iOS workflow 构建 build 6 并检查两种 IPA。源代码实现本身不能证明用户 iOS 16.3 上的 Shortcuts runtime 时间足够；需在安装后观察返回值和同一 run ID 终态。

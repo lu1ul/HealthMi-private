@@ -30,6 +30,11 @@ actor SyncEngine {
         self.writer = writer
     }
 
+    init(requestPolicy: MiRequestPolicy, writer: HealthWriter = HealthWriter()) {
+        self.client = MiAPIClient(requestPolicy: requestPolicy)
+        self.writer = writer
+    }
+
     /// 清除内部缓存，在一次同步会话开始前调用。
     func clearCache() {
         sleepCache = nil

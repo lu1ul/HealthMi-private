@@ -26,7 +26,6 @@ enum BackgroundSync {
 
     /// BGTask 处理器只能注册一次；系统会在同一进程内第二次注册时终止 App。
     @MainActor private static var didAttemptRegistration = false
-    @MainActor private static var isLaunchHandlerRegistered = false
 
     @MainActor
     static func register(syncHandler: @escaping @MainActor () async -> SyncRunStatus) {
@@ -136,7 +135,6 @@ enum BackgroundSync {
                 syncTask = nil
             }
         }
-        isLaunchHandlerRegistered = registered
         DiagnosticLogger.record(
             registered ? .info : .error,
             category: .backgroundTask,
@@ -149,24 +147,6 @@ enum BackgroundSync {
                 "BGTask 注册失败，请检查 BGTaskSchedulerPermittedIdentifiers"
             )
         }
-    }
-
-    /// App Intent 进程不保证走完主 App 启动流程。只有本进程已确认注册 handler
-    /// 时才提交立即调度；否则把运行保留在本地队列，由已有周期请求稍后领取。
-    @MainActor
-    static func scheduleFromIntentIfRegistered(immediate: Bool) throws -> Bool {
-        guard isLaunchHandlerRegistered else {
-            DiagnosticLogger.record(
-                .notice,
-                category: .backgroundTask,
-                event: "background.schedule.intent.deferred",
-                message: "当前进程未确认注册后台处理器，保留运行队列等待周期刷新",
-                metadata: ["taskIdentifier": taskIdentifier]
-            )
-            return false
-        }
-        try schedule(immediate: immediate)
-        return true
     }
 
     static func schedule(immediate: Bool = false) throws {

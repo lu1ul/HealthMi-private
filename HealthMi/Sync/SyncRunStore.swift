@@ -72,6 +72,8 @@ struct SyncErrorDetails: Codable, Hashable, Sendable {
                 )
             case .notConnected, .paginationLimit, .cursorLoop:
                 return Self(domain: "MiAPI", code: 0, message: error.localizedDescription)
+            case .executionDeadlineExceeded:
+                return Self(domain: "HealthMi.AppIntent", code: 408, message: error.localizedDescription)
             case .invalidResponse:
                 return Self(domain: "MiAPI", code: 0, message: error.localizedDescription)
             }
@@ -155,7 +157,7 @@ struct SyncRunRecord: Codable, Hashable, Identifiable, Sendable {
         var lines = [
             "\(status.displayName)（运行 ID：\(shortID)）",
             "触发方式：\(trigger.displayName)",
-            "排队时间：\(queuedAt.formatted(date: .abbreviated, time: .shortened))",
+            "\(trigger == .shortcut ? "请求时间" : "排队时间")：\(queuedAt.formatted(date: .abbreviated, time: .shortened))",
         ]
 
         if let startedAt {

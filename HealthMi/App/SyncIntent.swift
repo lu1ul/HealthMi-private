@@ -49,115 +49,144 @@ private func recordIntentReturn(
     )
 }
 
-/// "同步健康数据" App Intent：只负责把完整同步写入轻量本地队列。
-///
-/// Intent 返回时同步通常尚未开始。最终结果通过本地通知、同步历史以及
-/// `QueryLatestSyncStatusIntent` 查询；这样不会让快捷指令一直等待网络和 HealthKit。
+/// "同步健康数据" App Intent：在后台直接执行一次增量同步，并返回运行结果文本。
 struct SyncHealthDataIntent: AppIntent {
     nonisolated static let title: LocalizedStringResource = "同步健康数据"
-    nonisolated static let description = IntentDescription("排队从小米云端拉取最新健康数据并写入 Apple 健康")
+    nonisolated static let description = IntentDescription("立即增量同步小米健康数据并写入 Apple 健康")
     nonisolated static let openAppWhenRun = false
 
     @MainActor
-    func perform() async throws -> some IntentResult {
+    func perform() async throws -> some IntentResult & ReturnsValue<String> {
         defer { DiagnosticLogger.flush() }
         let invocation = ShortcutInvocation()
+        let executionContext = SyncExecutionContext.shortcut(startedAt: invocation.startedAt)
+        var runID: UUID?
         DiagnosticLogger.record(
             .info,
             category: .appIntent,
             event: "shortcut.sync.perform.started",
-            message: "快捷指令请求同步健康数据",
-            metadata: invocation.metadata()
+            message: "快捷指令开始直接执行增量同步",
+            metadata: invocation.metadata([
+                "executionBudgetSeconds": String(Int(SyncExecutionContext.shortcutBudget)),
+                "requestTimeoutSeconds": String(Int(executionContext.requestPolicy.requestTimeoutInterval)),
+                "automaticRetries": String(executionContext.requestPolicy.maxRetries),
+            ])
         )
         do {
             try SyncRunStore.markStale(invocationID: invocation.id)
-
-            let record: SyncRunRecord
-            let resultBranch: String
-
             if let active = try SyncRunStore.active() {
-                record = active
-                resultBranch = active.status == .queued ? "reused_queued" : "reused_running"
+                if active.status == .running {
+                    DiagnosticLogger.record(
+                        .notice,
+                        category: .appIntent,
+                        event: "shortcut.sync.perform.reused_running",
+                        message: "已有同步正在运行，快捷指令不会重复启动",
+                        runID: active.id,
+                        metadata: invocation.metadata([
+                            "status": active.status.rawValue,
+                            "trigger": active.trigger.rawValue,
+                        ])
+                    )
+                    recordIntentReturn(
+                        eventPrefix: "shortcut.sync.perform",
+                        invocation: invocation,
+                        branch: "reused_running",
+                        status: active.status.rawValue,
+                        runID: active.id
+                    )
+                    return .result(value: active.dialogText)
+                }
+
+                runID = active.id
                 DiagnosticLogger.record(
                     .notice,
                     category: .appIntent,
-                    event: "shortcut.sync.perform.reused_active_run",
-                    message: "已有活动运行，快捷指令没有重复排队",
+                    event: "shortcut.sync.perform.resumed_queued_directly",
+                    message: "快捷指令直接领取已有排队运行并开始同步",
                     runID: active.id,
                     metadata: invocation.metadata([
                         "status": active.status.rawValue,
                         "trigger": active.trigger.rawValue,
-                        "queuedAtEpochSeconds": String(Int(active.queuedAt.timeIntervalSince1970)),
-                        "queueAgeSeconds": String(max(0, Int(Date().timeIntervalSince(active.queuedAt)))),
                     ])
                 )
-
-                if active.status == .queued {
-                    do {
-                        let scheduled = try BackgroundSync.scheduleFromIntentIfRegistered(immediate: true)
-                        DiagnosticLogger.record(
-                            scheduled ? .info : .notice,
-                            category: .appIntent,
-                            event: "shortcut.sync.perform.queued_reschedule_attempted",
-                            message: scheduled
-                                ? "复用中的排队任务已重新提交后台调度请求"
-                                : "复用中的排队任务仍在队列中，当前进程未确认后台处理器注册",
-                            runID: active.id,
-                            metadata: invocation.metadata([
-                                "status": active.status.rawValue,
-                                "trigger": active.trigger.rawValue,
-                                "queueAgeSeconds": String(max(0, Int(Date().timeIntervalSince(active.queuedAt)))),
-                                "scheduledImmediately": String(scheduled),
-                            ])
-                        )
-                    } catch {
-                        DiagnosticLogger.record(
-                            .error,
-                            category: .appIntent,
-                            event: "shortcut.sync.perform.queued_reschedule_failed",
-                            message: "复用中的排队任务重新提交后台调度失败；保留原排队记录",
-                            runID: active.id,
-                            error: error,
-                            metadata: invocation.metadata([
-                                "status": active.status.rawValue,
-                                "queueAgeSeconds": String(max(0, Int(Date().timeIntervalSince(active.queuedAt)))),
-                            ])
-                        )
-                    }
-                }
             } else {
-                let enqueueResult = try enqueueRun(invocationID: invocation.id)
-                record = enqueueResult.record
-                resultBranch = "queued"
+                let record = try SyncRunStore.create(trigger: .shortcut)
+                runID = record.id
                 DiagnosticLogger.record(
                     .info,
                     category: .appIntent,
-                    event: "shortcut.sync.perform.queued",
-                    message: "快捷指令同步请求已写入运行队列",
+                    event: "shortcut.sync.run.created",
+                    message: "已创建快捷指令直接同步运行记录",
                     runID: record.id,
                     metadata: invocation.metadata([
                         "status": record.status.rawValue,
-                        "scheduledImmediately": String(enqueueResult.scheduledImmediately),
-                        "queuedAtEpochSeconds": String(Int(record.queuedAt.timeIntervalSince1970)),
+                        "trigger": record.trigger.rawValue,
                     ])
                 )
             }
 
+            guard let runID else {
+                throw NSError(domain: "HealthMi.SyncRun", code: 500, userInfo: [
+                    NSLocalizedDescriptionKey: "未能创建快捷指令同步运行记录。",
+                ])
+            }
+            let container = try await AppDatabase.shared.prepare()
+            let model = AppModel()
+            model.bootstrap()
+            let status = await model.syncAll(
+                modelContext: container.viewContext,
+                executionContext: executionContext,
+                runID: runID
+            )
+            let record = SyncRunStore.record(for: runID)
+            let fallbackResult = [
+                "同步结束：\(status.displayName)（运行 ID：\(String(runID.uuidString.prefix(8)))）。",
+                model.lastError ?? model.statusMessage,
+            ].filter { !$0.isEmpty }.joined(separator: "\n")
+            let resultText = record?.dialogText ?? fallbackResult
+            DiagnosticLogger.record(
+                status == .succeeded ? .info : .warning,
+                category: .appIntent,
+                event: "shortcut.sync.perform.direct_completed",
+                message: "快捷指令直接同步执行结束",
+                runID: runID,
+                metadata: invocation.metadata([
+                    "status": record?.status.rawValue ?? status.rawValue,
+                    "executionDurationMs": String(
+                        max(0, Int(Date().timeIntervalSince(invocation.startedAt) * 1_000))
+                    ),
+                    "completedTypeCount": String(record?.successfulItems.count ?? 0),
+                    "failedTypeCount": String(record?.failedItems.count ?? 0),
+                ])
+            )
             recordIntentReturn(
                 eventPrefix: "shortcut.sync.perform",
                 invocation: invocation,
-                branch: resultBranch,
-                status: record.status.rawValue,
-                runID: record.id
+                branch: "direct_completed",
+                status: record?.status.rawValue ?? status.rawValue,
+                runID: runID,
+                level: status == .succeeded ? .info : .warning
             )
-            return .result()
+            return .result(value: resultText)
         } catch {
             let details = SyncErrorDetails.from(error)
+            var resultText = "同步启动失败：\(details.summary)"
+            if let runID {
+                if SyncRunStore.record(for: runID)?.status != .running {
+                    do {
+                        try SyncRunStore.finish(id: runID, status: .failed, topLevelError: details)
+                        resultText = SyncRunStore.record(for: runID)?.dialogText ?? resultText
+                    } catch {
+                        resultText += "\n运行状态保存失败：\(error.localizedDescription)"
+                    }
+                }
+            }
             DiagnosticLogger.record(
                 .error,
                 category: .appIntent,
                 event: "shortcut.sync.perform.failed",
-                message: "快捷指令处理同步请求失败",
+                message: "快捷指令直接同步失败",
+                runID: runID,
                 error: error,
                 metadata: invocation.metadata([
                     "errorDomain": details.domain,
@@ -167,71 +196,14 @@ struct SyncHealthDataIntent: AppIntent {
             recordIntentReturn(
                 eventPrefix: "shortcut.sync.perform",
                 invocation: invocation,
-                branch: "error_result",
+                branch: "direct_failed",
                 status: "failed",
+                runID: runID,
                 level: .error,
                 error: error
             )
-            return .result()
+            return .result(value: resultText)
         }
-    }
-
-    @MainActor
-    private func enqueueRun(invocationID: String) throws -> (record: SyncRunRecord, scheduledImmediately: Bool) {
-        let record = try SyncRunStore.create(trigger: .shortcut)
-        DiagnosticLogger.record(
-            .info,
-            category: .appIntent,
-            event: "shortcut.sync.run.created",
-            message: "已创建快捷指令同步运行记录",
-            runID: record.id,
-            metadata: [
-                "invocationID": invocationID,
-                "status": record.status.rawValue,
-                "trigger": record.trigger.rawValue,
-                "queuedAtEpochSeconds": String(Int(record.queuedAt.timeIntervalSince1970)),
-            ]
-        )
-        let scheduledImmediately: Bool
-        do {
-            scheduledImmediately = try BackgroundSync.scheduleFromIntentIfRegistered(
-                immediate: true
-            )
-        } catch {
-            let details = SyncErrorDetails.from(error)
-            try? SyncRunStore.finish(id: record.id, status: .failed, topLevelError: details)
-            DiagnosticLogger.record(
-                .error,
-                category: .appIntent,
-                event: "shortcut.sync.run.schedule.failed",
-                message: "提交快捷指令后台刷新请求失败",
-                runID: record.id,
-                error: error,
-                metadata: [
-                    "invocationID": invocationID,
-                    "errorDomain": details.domain,
-                    "errorCode": String(details.code),
-                ]
-            )
-            throw error
-        }
-        DiagnosticLogger.record(
-            scheduledImmediately ? .info : .notice,
-            category: .appIntent,
-            event: "shortcut.sync.run.queue_result",
-            message: scheduledImmediately
-                ? "运行已排队并提交立即后台调度请求"
-                : "运行已排队，等待周期后台刷新领取",
-            runID: record.id,
-            metadata: [
-                "invocationID": invocationID,
-                "scheduledImmediately": String(scheduledImmediately),
-                "trigger": record.trigger.rawValue,
-                "queuedAtEpochSeconds": String(Int(record.queuedAt.timeIntervalSince1970)),
-            ]
-        )
-
-        return (record, scheduledImmediately)
     }
 }
 

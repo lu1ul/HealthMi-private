@@ -198,7 +198,7 @@ struct HealthMiApp: App {
                 backgroundModel.bootstrap()
                 let status = await backgroundModel.syncAll(
                     modelContext: container.viewContext,
-                    isBackground: true,
+                    executionContext: .background,
                     runID: run.id
                 )
                 return status

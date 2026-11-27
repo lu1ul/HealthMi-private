@@ -293,13 +293,13 @@ final class AppModel: ObservableObject {
 
     /// - Parameters:
     ///   - forceBackfill: 为 true 时忽略增量游标，按 `backfillDays` 重新回填历史。
-    ///   - isBackground: 是否为后台同步触发（完成后发送本地通知）。
-    ///   - runID: 后台或快捷指令排队创建的运行 ID；前台手动同步可以不传。
+    ///   - executionContext: 区分前台、系统后台刷新和快捷指令的执行约束。
+    ///   - runID: 后台或快捷指令创建的运行 ID；前台手动同步可以不传。
     @discardableResult
     func syncAll(
         modelContext: NSManagedObjectContext,
         forceBackfill: Bool = false,
-        isBackground: Bool = false,
+        executionContext: SyncExecutionContext = .foreground,
         runID: UUID? = nil
     ) async -> SyncRunStatus {
         let diagnosticRunID = runID ?? UUID()
@@ -311,10 +311,13 @@ final class AppModel: ObservableObject {
             message: "开始执行健康数据同步",
             runID: diagnosticRunID,
             metadata: [
-                "trigger": isBackground ? "background" : (runID == nil ? "app" : "queued"),
+                "trigger": executionContext.trigger.rawValue,
                 "forceBackfill": String(forceBackfill),
                 "backfillDays": String(backfillDays),
                 "enabledTypeCount": String(enabledTypes.count),
+                "executionDeadlineEpochSeconds": executionContext.deadline.map {
+                    String(Int($0.timeIntervalSince1970))
+                } ?? "none",
             ]
         )
         guard Self.syncActivity.withLock({ state in
@@ -328,7 +331,9 @@ final class AppModel: ObservableObject {
                 code: 409,
                 message: "已有同步在进行中，已跳过本次触发"
             )
-            finishRun(runID, status: .failed, topLevelError: error)
+            if let runID, SyncRunStore.record(for: runID)?.status != .running {
+                finishRun(runID, status: .failed, topLevelError: error)
+            }
             DiagnosticLogger.record(
                 .warning,
                 category: .sync,
@@ -350,12 +355,16 @@ final class AppModel: ObservableObject {
         lastError = nil
         defer { isSyncing = false }
 
-        // 新增类型（如呼吸频率）可能还没授权，先补齐授权，否则写入会被 HealthKit 拒绝
-        await ensureHealthKitAuthorization()
+        // 快捷指令不可依赖后台弹出首次权限界面；首次授权由前台设置流程完成。
+        if executionContext.mayRequestHealthKitAuthorization {
+            await ensureHealthKitAuthorization()
+        }
         // 检查用户是否在系统设置中撤销了权限
         refreshHealthKitStatus()
         guard healthKitAuthorized else {
-            let message = "HealthKit 写入权限未授权，请在 设置 → 健康 → 数据访问 中允许 HealthMi"
+            let message = executionContext.isShortcut
+                ? "HealthKit 写入权限未准备好。请先打开 HealthMi，在设置中完成健康权限授权，再运行快捷指令。"
+                : "HealthKit 写入权限未授权，请在 设置 → 健康 → 数据访问 中允许 HealthMi"
             let error = SyncErrorDetails.make(
                 domain: HKErrorDomain,
                 code: HKError.Code.errorAuthorizationDenied.rawValue,
@@ -373,12 +382,15 @@ final class AppModel: ObservableObject {
                 errorCode: error.code
             )
             finishRun(runID, status: .failed, topLevelError: error)
-            await notifyRunIfNeeded(runID: runID, fallbackError: message, isBackground: isBackground)
+            await notifyRunIfNeeded(
+                runID: runID, fallbackError: message,
+                isBackground: executionContext.sendsBackgroundNotification
+            )
             return .failed
         }
 
         do {
-            try await ensureEngine()
+            try await ensureEngine(requestPolicy: executionContext.requestPolicy)
         } catch {
             let details = SyncErrorDetails.from(error)
             lastError = details.message
@@ -393,7 +405,10 @@ final class AppModel: ObservableObject {
                 metadata: ["errorDomain": details.domain, "errorCode": String(details.code)]
             )
             finishRun(runID, status: .failed, topLevelError: details)
-            await notifyRunIfNeeded(runID: runID, fallbackError: details.message, isBackground: isBackground)
+            await notifyRunIfNeeded(
+                runID: runID, fallbackError: details.message,
+                isBackground: executionContext.sendsBackgroundNotification
+            )
             return .failed
         }
 
@@ -405,6 +420,7 @@ final class AppModel: ObservableObject {
         var successCount = 0
         var failureCount = 0
         var cancelled = false
+        var executionBudgetExceeded = false
         for type in types {
             currentSyncIndex += 1
             // 后台同步被系统取消时，尽早退出
@@ -415,6 +431,19 @@ final class AppModel: ObservableObject {
                     category: .sync,
                     event: "sync.run.cancelled.before_type",
                     message: "同步在开始下一类别前收到取消",
+                    runID: diagnosticRunID,
+                    dataType: type.rawValue,
+                    metadata: ["typeIndex": String(currentSyncIndex)]
+                )
+                break
+            }
+            if executionContext.hasReachedSafetyDeadline {
+                executionBudgetExceeded = true
+                DiagnosticLogger.record(
+                    .notice,
+                    category: .appIntent,
+                    event: "shortcut.sync.budget_exhausted.before_type",
+                    message: "快捷指令同步时间预算即将用尽，停止启动下一类数据",
                     runID: diagnosticRunID,
                     dataType: type.rawValue,
                     metadata: ["typeIndex": String(currentSyncIndex)]
@@ -530,6 +559,21 @@ final class AppModel: ObservableObject {
                     )
                     break
                 }
+                if executionContext.hasReachedSafetyDeadline
+                    || (error as? MiAPIError)?.isExecutionDeadlineExceeded == true {
+                    executionBudgetExceeded = true
+                    DiagnosticLogger.record(
+                        .notice,
+                        category: .appIntent,
+                        event: "shortcut.sync.budget_exhausted.during_type",
+                        message: "快捷指令同步时间预算即将用尽，停止继续处理数据类别",
+                        runID: diagnosticRunID,
+                        dataType: type.rawValue,
+                        error: error,
+                        metadata: ["durationMs": Self.durationMilliseconds(since: typeStartedAt)]
+                    )
+                    break
+                }
                 let message = "\(type.displayName)：\(Self.describeSyncError(error))"
                 lastError = message
                 messages.append("\(type.displayName) ❌")
@@ -553,14 +597,21 @@ final class AppModel: ObservableObject {
         }
         statusMessage = messages.joined(separator: "  ")
         refreshHealthKitStatus()
-        // 被系统取消时及时结束，避免额外 HealthKit 查询拖延后台过期处理。
-        if !cancelled {
+        // 快捷指令无需刷新仪表盘；取消/预算耗尽时也避免额外 HealthKit 查询。
+        if !cancelled && !executionBudgetExceeded && executionContext.refreshesDashboard {
             await refreshSummary()
         }
         let finalStatus: SyncRunStatus
         if cancelled {
-            statusMessage = statusMessage.isEmpty ? "同步已取消" : "\(statusMessage)  已取消"
+            let message = executionContext.isShortcut
+                ? "快捷指令同步已取消；已完成类别的游标已保存，再次运行可继续。"
+                : "同步已取消"
+            statusMessage = statusMessage.isEmpty ? message : "\(statusMessage)  \(message)"
             finalStatus = .cancelled
+        } else if executionBudgetExceeded {
+            let message = "快捷指令时间预算用尽；已完成类别的游标已保存，再次运行可继续同步。"
+            statusMessage = statusMessage.isEmpty ? message : "\(statusMessage)  \(message)"
+            finalStatus = successCount > 0 ? .partialFailure : .failed
         } else if failureCount == 0 {
             finalStatus = .succeeded
         } else if successCount > 0 {
@@ -568,13 +619,24 @@ final class AppModel: ObservableObject {
         } else {
             finalStatus = .failed
         }
-        let topLevelError = cancelled
-            ? SyncErrorDetails.make(
-                domain: "HealthMi.Sync",
-                code: 499,
-                message: "同步任务在完成前被取消。"
+        let topLevelError: SyncErrorDetails?
+        if executionBudgetExceeded {
+            topLevelError = SyncErrorDetails.make(
+                domain: "HealthMi.AppIntent",
+                code: 408,
+                message: "快捷指令时间预算用尽；已成功类别游标已保存，重新运行可继续同步未完成类别。"
             )
-            : nil
+        } else if cancelled {
+            topLevelError = SyncErrorDetails.make(
+                domain: executionContext.isShortcut ? "HealthMi.AppIntent" : "HealthMi.Sync",
+                code: 499,
+                message: executionContext.isShortcut
+                    ? "快捷指令同步在完成前被系统或调用方取消；已完成类别游标已保存，重新运行可继续。"
+                    : "同步任务在完成前被取消。"
+            )
+        } else {
+            topLevelError = nil
+        }
         finishRun(runID, status: finalStatus, topLevelError: topLevelError)
         DiagnosticLogger.record(
             finalStatus == .succeeded ? .info : (finalStatus == .cancelled ? .notice : .warning),
@@ -586,10 +648,14 @@ final class AppModel: ObservableObject {
                 "status": finalStatus.rawValue,
                 "successCount": String(successCount),
                 "failureCount": String(failureCount),
+                "executionBudgetExceeded": String(executionBudgetExceeded),
                 "durationMs": Self.durationMilliseconds(since: syncStartedAt),
             ]
         )
-        await notifyRunIfNeeded(runID: runID, fallbackError: lastError, isBackground: isBackground)
+        await notifyRunIfNeeded(
+            runID: runID, fallbackError: lastError,
+            isBackground: executionContext.sendsBackgroundNotification
+        )
         return finalStatus
     }
 
@@ -715,10 +781,10 @@ final class AppModel: ObservableObject {
         return "HealthKit 授权失败（\(nsError.domain) / code=\(nsError.code)）：\(error.localizedDescription)"
     }
 
-    private func ensureEngine() async throws {
+    private func ensureEngine(requestPolicy: MiRequestPolicy) async throws {
         if engine != nil { return }
         guard let cred = CredentialStore.load() else { throw AppError.noCredentials }
-        let newEngine = SyncEngine()
+        let newEngine = SyncEngine(requestPolicy: requestPolicy)
         do {
             try await newEngine.connect(userId: cred.userId, passToken: cred.passToken)
             engine = newEngine
