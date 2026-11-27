@@ -1911,3 +1911,5 @@ Apple 官方资料：[`AppIntent.perform()`](https://developer.apple.com/documen
 #### 验证状态与限制
 
 本机 `git diff --check` 通过；调用点搜索确认 AppModel 前台、BGTask 和 Shortcut 三个入口均使用正确执行上下文，Shortcut Intent 中已无 BGTask 调度调用。当前 Windows 主机没有 Xcode，尚未编译；下一阶段将通过 `personal` 私有仓库的 iOS workflow 构建 build 6 并检查两种 IPA。源代码实现本身不能证明用户 iOS 16.3 上的 Shortcuts runtime 时间足够；需在安装后观察返回值和同一 run ID 终态。
+
+实现提交为 `bb0547a`；本次 `project.yml` 将 `CURRENT_PROJECT_VERSION` 从 5 提升为 6，保留 Marketing Version 1.1.0 和最低 iOS 16.0。GitHub workflow 尚未运行，build 6 IPA 尚未生成。

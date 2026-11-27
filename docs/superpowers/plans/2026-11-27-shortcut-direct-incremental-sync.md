@@ -13,9 +13,9 @@
 
 ## 阶段 2：版本与文档
 
-- [ ] 将 `CURRENT_PROJECT_VERSION` 从 5 增至 6。
-- [ ] 更新 `CHANGELOG.md`、本设计状态、iOS 16 适配记录和全面审查报告，注明执行时限与验证边界。
-- [ ] 提交 build 6 和实施记录。
+- [x] 将 `CURRENT_PROJECT_VERSION` 从 5 增至 6。
+- [x] 更新 `README.md`、`CHANGELOG.md`、本设计状态、iOS 16 适配记录和全面审查报告，注明执行时限与验证边界。
+- [x] 提交 build 6 源码与文档记录；GitHub 编译和产物核验仍属于阶段 3。
 
 ## 阶段 3：GitHub 构建和 IPA 核验
 

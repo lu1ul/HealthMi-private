@@ -320,6 +320,8 @@ iOS 16 的 App Intent 后台执行受系统时限约束；Apple 文档当前说�
 
 快捷运行预算为 22 秒、单网络请求最多 8 秒、关闭自动重试；跳过 HealthKit 权限弹窗和仪表盘摘要。预算耗尽时停止后续类别，已完成类别游标保留供下次快捷指令续跑。BGAppRefresh 周期刷新仍保留。当前完成的是源代码实现和静态差异/调用点检查；GitHub Release 编译和 IPA 静态核验尚待执行，真机 iOS 16.3 Shortcut runtime 仍不能由 GitHub IPA 构建代替。
 
+build 6 的 `CFBundleVersion` 已从 5 提升到 6（Marketing Version 仍为 1.1.0，部署目标仍为 iOS 16.0）；Release 编译和 IPA 核验待 GitHub Actions。
+
 ## 2026-11-25 build 3 快捷指令兼容修复记录
 
 ### 代码检查与决定
