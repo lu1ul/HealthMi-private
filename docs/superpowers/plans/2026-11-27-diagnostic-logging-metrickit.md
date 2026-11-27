@@ -89,9 +89,10 @@
 - Modify: `HealthMi项目代码全面审查报告.md`
 - Update: this plan's checkboxes
 
-- [ ] 记录 Apple 官方文档中旧订阅接口、JSON 序列化和 past payload 生命周期限制；记录设计、每个本地 commit SHA、静态核查结果。
-- [ ] 仅对 `personal` 远程 `lu1ul/HealthMi-private` 推送已提交代码以触发 `main` workflow；确认实际 push URL 后再执行，绝不 push `origin`。
-- [ ] 使用已认证的 GitHub CLI `gh` 查看运行状态和日志，并下载 `HealthMi-trollstore-healthkit-ipa` 与 dSYM artifact；不使用浏览器下载。
+- [x] 记录 Apple 官方文档中旧订阅接口、JSON 序列化和 past payload 生命周期限制；记录设计、每个本地 commit SHA、静态核查结果。
+- [x] 仅对 `personal` 远程 `lu1ul/HealthMi-private` 推送已提交代码以触发 `main` workflow；确认实际 push URL 后再执行，绝不 push `origin`。
+- [x] 使用已认证的 GitHub CLI `gh` 检查首个构建 run `45933997852` 并读取失败日志；未下载 artifact，因为该 run 编译失败且没有产物。
+- [ ] 编译成功后使用 `gh` 下载 `HealthMi-trollstore-healthkit-ipa`、`HealthMi-unsigned-ipa` 与 `HealthMi-dSYMs`；不使用浏览器下载。
 - [ ] 核验 IPA 的 `com.healthmi.HealthMi`、版本 `1.1.0 (5)`、`MinimumOSVersion` 16.0、arm64、HealthKit/TrollStore/Keychain entitlements、HealthKit usage strings、App Intents metadata；核验 dSYM UUID 与 IPA 内可执行文件一致。
 - [ ] 对 IPA 与 dSYM 计算 SHA-256，记录 workflow run ID、提交 SHA、产物路径、哈希、核验结果和 MetricKit 设备投递限制。
 - [ ] Commit: `docs: record MetricKit IPA build verification`

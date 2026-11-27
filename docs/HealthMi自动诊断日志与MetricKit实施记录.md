@@ -1,7 +1,7 @@
 # HealthMi 自动诊断日志与 MetricKit 实施记录
 
 日期：2026-11-27
-状态：核心日志与 MetricKit 存储代码已本地提交；界面和 workflow 仍在实施，尚未触发 GitHub 构建。
+状态：日志与 MetricKit 功能、dSYM workflow 已本地提交并推送到 `personal`；首次 GitHub 编译失败，已修复源码类型检查问题，待重跑。
 
 ## 目标
 
@@ -46,8 +46,13 @@ GitHub CLI 官方命令手册：[`gh run view`](https://cli.github.com/manual/gh
 
 - `d07ec25 docs: plan MetricKit diagnostic logging`：保存实施计划和验收步骤。
 - `273a648 feat: enrich diagnostic event context and storage health`：提交进程上下文、脱敏错误链、MetricKit JSON 模型/本地存储、错误统计、共用保留策略、schema v2 导出底层和 build 5/dSYM 项目设置。
+- `abdbbaf feat: persist MetricKit diagnostic reports locally`：应用启动时注册 MetricKit 订阅，并记录 API 限制和当前仓库状态。
+- `744bfc9 feat: view and export MetricKit diagnostics`：诊断日志页增加存储健康、MetricKit 报告查看/复制和事件上下文详情。
+- `22f8392 build: archive matching dSYM for diagnostic IPA`：Release 输出启用 dSYM，校验 source app、unsigned IPA、TrollStore IPA 与 dSYM 的 UUID，并上传独立 dSYM artifact。
 - 2026-11-27 GitHub CLI 检查：当前登录用户为 `lu1ul`；`lu1ul/HealthMi-private` 的默认分支是 `main`，仓库当前公开（`isPrivate=false`）。
-- 当前阶段：将 MetricKit 订阅挂到应用启动，并完成日志页报告浏览、复制和存储状态 UI；之后完成 dSYM workflow。
+- 当前阶段：提交上述编译修复后，重新触发 `personal` 远程的 GitHub Actions；通过后再由 `gh` 下载并核验 IPA 与 dSYM。
+- 2026-11-27 workflow run `45933997852`（提交 `22f83925ea63f1f1e4bfdcf632b378be5fd0485d`）已通过 checkout、Xcode 16.4 工具安装与 XcodeGen 工程生成，但 Swift 编译失败：`DiagnosticsLogView.swift:29` 的搜索字段数组表达式触发编译器“unable to type-check this expression in reasonable time”。无 IPA/dSYM artifact 生成。
+- 修复：把事件搜索字段拼接移入 `matchesSearch(_:query:)`，拆开错误链与 metadata 字段追加；移除 `DiagnosticJSONValue` 单值 JSON null 检查上的冗余 `try`。待新 run 验证。
 - 下一阶段：完成 MetricKit 订阅启动、workflow dSYM 归档与 build number 5，提交后通过 `personal` 远程触发构建。
 - 构建下载固定使用 GitHub CLI `gh`，不使用浏览器；推送目标固定为 `personal`（`lu1ul/HealthMi-private`），不得推送 `origin`（`ShawnDiego/HealthMi`）。
 - 本机为 Windows，当前没有 `xcodebuild`；不新增、不运行测试套件。验收使用 GitHub Actions 构建和 IPA/dSYM 静态核验。

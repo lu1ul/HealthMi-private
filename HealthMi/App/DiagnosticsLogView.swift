@@ -34,26 +34,34 @@ struct DiagnosticsLogView: View {
             }
             guard !searchText.isEmpty else { return true }
             let query = searchText.localizedLowercase
-            let searchable = [
-                event.event,
-                event.message,
-                event.category.displayName,
-                event.category.rawValue,
-                event.level.displayName,
-                event.dataType ?? "",
-                event.runID ?? "",
-                event.errorDomain ?? "",
-                event.errorCode.map { String($0) } ?? "",
-                event.processSessionID ?? "",
-                event.sequenceNumber.map { String($0) } ?? "",
-                event.sourceFile ?? "",
-                event.sourceFunction ?? "",
-                event.sourceLine.map { String($0) } ?? "",
-                event.errorChain?.map { "\($0.domain)/\($0.code) \($0.message)" }.joined(separator: " ") ?? "",
-                event.metadata.map { "\($0.key)=\($0.value)" }.joined(separator: " "),
-            ].joined(separator: " ").localizedLowercase
-            return searchable.contains(query)
+            return Self.matchesSearch(event, query: query)
         }
+    }
+
+    private static func matchesSearch(_ event: DiagnosticLogEvent, query: String) -> Bool {
+        var searchableFields = [
+            event.event,
+            event.message,
+            event.category.displayName,
+            event.category.rawValue,
+            event.level.displayName,
+            event.dataType ?? "",
+            event.runID ?? "",
+            event.errorDomain ?? "",
+            event.errorCode.map { String($0) } ?? "",
+            event.processSessionID ?? "",
+            event.sequenceNumber.map { String($0) } ?? "",
+            event.sourceFile ?? "",
+            event.sourceFunction ?? "",
+            event.sourceLine.map { String($0) } ?? "",
+        ]
+        if let errorChain = event.errorChain {
+            searchableFields.append(contentsOf: errorChain.map { "\($0.domain)/\($0.code) \($0.message)" })
+        }
+        searchableFields.append(contentsOf: event.metadata.keys.sorted().map {
+            "\($0)=\(event.metadata[$0] ?? "")"
+        })
+        return searchableFields.joined(separator: " ").localizedLowercase.contains(query)
     }
 
     private var visibleEvents: [DiagnosticLogEvent] {

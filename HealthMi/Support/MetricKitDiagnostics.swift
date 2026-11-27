@@ -13,7 +13,7 @@ indirect enum DiagnosticJSONValue: Codable, Hashable, Sendable {
 
     init(from decoder: Decoder) throws {
         if let single = try? decoder.singleValueContainer() {
-            if try single.decodeNil() {
+            if single.decodeNil() {
                 self = .null
             } else if let value = try? single.decode(Bool.self) {
                 self = .boolean(value)
