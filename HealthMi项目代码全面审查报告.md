@@ -1,10 +1,10 @@
 # HealthMi 项目代码全面审查与 HealthKit 权限故障定位
 
-> 审查日期：2026-11-23
+> 审查日期：2026-11-23；构建与包级记录更新至 2026-11-27
 > 源码审查基线：`82fef0f`（`fix: weak link SwiftData for iOS 16`；后续提交仅更新文档）。
 > 结论类型：静态代码审查 + 本地 IPA 包结构检查 + 2026-11-24 GitHub Actions 构建/模拟器诊断复核；初始审查阶段没有修改业务源码或运行构建，后续只验证了工作流和产物。
 
-## 当前结论（截至 2026-11-25）
+## 当前结论（截至 2026-11-27）
 
 本报告早期章节保留了问题定位过程和当时的证据边界；以下内容是目前应采用的最终状态：
 
@@ -17,6 +17,8 @@
 - **“查询同步状态”在 iOS 16.3 的动作列表中仍未出现，属于未解决的发现问题。** build 3 源码和 IPA metadata 均包含该动作，但设备只显示“同步健康数据”。设备系统日志显示打开 App Shortcuts 页后，Shortcuts/linkd 在获取 HealthMi action/phrase 时发生 FBS Code 5；这可能与发现异常相关，但日志隐藏了具体 phrase，不能断定它专指查询动作。`ShortcutsLink` 是打开 HealthMi App Shortcuts 页面的按钮，不是第三个快捷指令动作。详见第 9.29 节。
 - **FBS Code 5 已与实际同步 Intent 执行区分。** Code 5 发生在 `ShortcutsLink` 跳转后、Shortcuts 尝试获取 HealthMi App Intent action 的 `LNEmbeddedApplicationConnection` 路径；11 秒后手动同步 Intent 由 BackgroundShortcutRunner 成功打开 HealthMi 并完成。前者是入口/发现连接问题，不是本次同步 `perform()` 的失败；更深层的 LinkServices/iOS 16.3 原因仍待定位。
 - **诊断日志源码已进入成功构建的 build 2。** 日志页、复制筛选文本和 JSON 文件导出，以及网络、HealthKit、快捷指令、后台任务、Keychain、登录和通知埋点均已实现；新版 IPA 已生成。此前的代码阶段提交 `176c2d0` 不再是“尚待编译”状态。详见第 9.19、9.24 节。
+
+- **自动诊断日志 build 5 已成功构建并完成本地 IPA/dSYM 核验。**GitHub Actions run 45934717225 使用提交 5cf998e54c2a7a9009dd595959c7ce48e2d9cf0f；TrollStore IPA 的 Bundle ID、1.1.0 (5)、iOS 16.0、arm64、HealthKit/TrollStore/Keychain entitlements 和用途说明均符合 workflow 预期；匹配 dSYM UUID 为 95F386CF-376F-32D7-9A61-1792938EC3A8。MetricKit 真机报告投递和 iOS 16.3 Shortcuts 动作列表仍需设备侧验证。
 
 ## 一、结论摘要
 
@@ -1769,3 +1771,32 @@ Apple 官方资料：`ShortcutsLink` 用于打开当前 App 在 Shortcuts 中的
 #### 验证边界
 
 本次证据证明 build 4 成功构建、IPA 结构和所需 metadata/entitlement 存在；不能证明 iOS 16.3 的系统动作列表会显示“查询同步状态”，也不能证明移除 `ShortcutsLink` 后用户设备的 LinkServices/FBS 错误已消失。原因是本轮没有 iOS 16.3 真机或对应系统 runtime 复测。后续应在 TrollStore 安装 build 4 后分别测试：打开 HealthMi 不再尝试跳转快捷指令页；从快捷指令“添加操作”搜索 HealthMi；检查同步 Intent 是否仍正常返回、查询 Intent 是否出现；同时抓取系统日志确认是否还有 `LNEmbeddedApplicationConnection` / FBS Code 5。即使同步 Intent 在 Shortcuts 中显示成功，也仍需从 HealthMi 同步历史确认 BGTask 是否领取并完成运行。
+
+### 9.31 build 5：自动诊断日志与 MetricKit IPA / dSYM 核验（2026-11-27）
+
+#### GitHub Actions 构建
+
+首次构建 run 45933997852 在 Swift 编译阶段失败，原因是 DiagnosticsLogView 的搜索字段数组表达式触发编译器类型检查超时。拆分 matchesSearch(_:query:) 后，最终 run 45934717225 在 macOS 15 / Xcode 16.4 成功完成工程生成、Release 编译、unsigned IPA、TrollStore IPA、entitlement 校验、dSYM 归档和三个 artifact 上传。构建 commit 为 5cf998e54c2a7a9009dd595959c7ce48e2d9cf0f，分支 main；仅通过 personal 远程构建，没有推送到原始 origin。
+
+三个 artifact 均使用 gh run download 下载，没有使用浏览器，保存在 Git 忽略的 build 目录：
+
+| 产物 | 本地路径 | 大小 | SHA-256 |
+|---|---|---:|---|
+| TrollStore HealthKit IPA | build/HealthMi-MetricKit-build5-run-45934717225/trollstore/HealthMi-trollstore-healthkit.ipa | 2,214,215 字节 | ca9c7ef39abe2586b91ce49db6decc2661cab41ee7d3318fd228049a65389e4a |
+| Unsigned IPA | build/HealthMi-MetricKit-build5-run-45934717225/unsigned/HealthMi-unsigned.ipa | 2,148,551 字节 | 61adb07874648f52fdbf92d1b4e63540acb8ea2f78ee586c34f37cca688dcbde |
+| dSYM ZIP | build/HealthMi-MetricKit-build5-run-45934717225/dsym/HealthMi-dSYMs.zip | 2,300,657 字节 | 303fae1f43c4ca8cb4d665f92af0121e338668a39b380d6859788720a0d04106 |
+
+#### 独立本地核验结果
+
+Python zipfile 对两个 IPA 和 dSYM ZIP 的 CRC 完整性检查全部通过。对 IPA 内 Info.plist、App Intents metadata 和 arm64 Mach-O header 做了独立读取；对 IPA 与 dSYM 的 LC_UUID 做了解析并比较：
+
+- 两个 IPA 的 Bundle ID 均为 com.healthmi.HealthMi；版本均为 1.1.0 (5)，MinimumOSVersion 为 16.0，DTPlatformName 为 iphoneos。
+- 两个主程序均为 arm64，Mach-O 记录的最低系统版本为 iOS 16.0.0；HealthKit share/update 用途说明均存在。
+- 两个 IPA 都包含 Metadata.appintents。包内 root.ssu.yaml / extract.actionsdata 有 SyncHealthDataIntent 和 QueryLatestSyncStatusIntent 标识；动作元数据为 isDiscoverable=true、openAppWhenRun=false。它证明构建产物包含两项动作声明，不代表 iOS 16.3 Shortcuts UI 已成功发现或显示它们。
+- TrollStore IPA 随包 entitlement-report.txt 记录 LC_CODE_SIGNATURE 存在，ldid -e 检查到 com.apple.developer.healthkit=true、application-identifier=TROLLTROLL.*、team identifier TROLLTROLL、get-task-allow=true、Keychain groups TROLLTROLL.* 与 com.apple.token；两条 HealthKit usage descriptions 存在；embedded.mobileprovision 不存在。此 entitlement 报告只对应 TrollStore IPA；unsigned IPA 是供后续签名使用的独立版本。
+- IPA 主程序与 dSYM DWARF 均为 arm64，UUID 都是 95F386CF-376F-32D7-9A61-1792938EC3A8。工作流的 dwarfdump 逐架构比较也通过；本地核验出的 dSYM ZIP SHA-256 与 dsym-report.txt 一致。
+- TrollStore IPA SHA-256 与 entitlement-report.txt 一致；unsigned IPA 本地哈希为 61adb07874648f52fdbf92d1b4e63540acb8ea2f78ee586c34f37cca688dcbde。
+
+#### 验证边界
+
+run 成功证明该源码可以在指定 GitHub runner 上构建，并证明下载包的静态结构与配置。当前 Windows 主机没有 Xcode；本轮没有运行测试套件或 Simulator，也没有安装 build 5 到 iOS 16.3 真机。因此尚不能确认 MetricKit 是否在设备上实际投递过报告，也不能确认 Shortcuts runtime 是否会在设备的“添加操作”界面展示“查询同步状态”。这两项需要安装此 build 后分别做设备验证。

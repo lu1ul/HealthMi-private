@@ -1,7 +1,7 @@
 # HealthMi 自动诊断日志与 MetricKit 实施记录
 
 日期：2026-11-27
-状态：日志与 MetricKit 功能、dSYM workflow 已本地提交并推送到 `personal`；首次 GitHub 编译失败，已修复源码类型检查问题，待重跑。
+状态：日志与 MetricKit 功能已实现；build 5 已由 GitHub Actions 成功构建，TrollStore IPA、unsigned IPA 与匹配 dSYM 已下载并完成包级核验。
 
 ## 目标
 
@@ -50,13 +50,45 @@ GitHub CLI 官方命令手册：[`gh run view`](https://cli.github.com/manual/gh
 - `744bfc9 feat: view and export MetricKit diagnostics`：诊断日志页增加存储健康、MetricKit 报告查看/复制和事件上下文详情。
 - `22f8392 build: archive matching dSYM for diagnostic IPA`：Release 输出启用 dSYM，校验 source app、unsigned IPA、TrollStore IPA 与 dSYM 的 UUID，并上传独立 dSYM artifact。
 - 2026-11-27 GitHub CLI 检查：当前登录用户为 `lu1ul`；`lu1ul/HealthMi-private` 的默认分支是 `main`，仓库当前公开（`isPrivate=false`）。
-- 当前阶段：提交上述编译修复后，重新触发 `personal` 远程的 GitHub Actions；通过后再由 `gh` 下载并核验 IPA 与 dSYM。
+- 2026-11-27 GitHub Actions run 45934717225（commit 5cf998e54c2a7a9009dd595959c7ce48e2d9cf0f）成功完成 Xcode 16.4 构建、两种 IPA 打包、TrollStore entitlement 核验、dSYM UUID 比对和 artifact 上传。首次重跑 45933997852 的编译器类型检查问题已在 5cf998e 修复。
 - 2026-11-27 workflow run `45933997852`（提交 `22f83925ea63f1f1e4bfdcf632b378be5fd0485d`）已通过 checkout、Xcode 16.4 工具安装与 XcodeGen 工程生成，但 Swift 编译失败：`DiagnosticsLogView.swift:29` 的搜索字段数组表达式触发编译器“unable to type-check this expression in reasonable time”。无 IPA/dSYM artifact 生成。
-- 修复：把事件搜索字段拼接移入 `matchesSearch(_:query:)`，拆开错误链与 metadata 字段追加；移除 `DiagnosticJSONValue` 单值 JSON null 检查上的冗余 `try`。待新 run 验证。
-- 下一阶段：完成 MetricKit 订阅启动、workflow dSYM 归档与 build number 5，提交后通过 `personal` 远程触发构建。
+- 编译修复：将事件搜索字段匹配拆成独立函数，拆开错误链与 metadata 字段追加，并移除 DiagnosticJSONValue 单值 JSON null 检查上的冗余 try。后续 run 45934717225 已成功编译。
+- 本轮已完成 MetricKit 订阅启动、workflow dSYM 归档和 build number 5；最终构建与本地包核验结果记录于下文。
 - 构建下载固定使用 GitHub CLI `gh`，不使用浏览器；推送目标固定为 `personal`（`lu1ul/HealthMi-private`），不得推送 `origin`（`ShawnDiego/HealthMi`）。
 - 本机为 Windows，当前没有 `xcodebuild`；不新增、不运行测试套件。验收使用 GitHub Actions 构建和 IPA/dSYM 静态核验。
 
 ## 构建与产物核验
 
-尚未开始。构建完成后在此记录 workflow run ID、提交 SHA、IPA/dSYM 本地路径和 SHA-256、Bundle ID、版本、最低系统版本、App Intents metadata、entitlements 与 dSYM UUID 比对结果。
+### GitHub Actions
+
+- 仓库：lu1ul/HealthMi-private，分支 main；只在 personal 远程触发本次构建，没有推送到 origin。
+- 成功运行：45934717225；GitHub Actions job “Build unsigned and TrollStore HealthKit IPAs” 成功。
+- 构建提交：5cf998e54c2a7a9009dd595959c7ce48e2d9cf0f。
+- 构建日期：2026-11-27；Xcode 16.4 / macOS 15 runner。
+- 首次运行 45933997852 因 DiagnosticsLogView 搜索字段表达式触发 Swift 类型检查超时而失败；拆分匹配函数并移除冗余 try 后，运行 45934717225 成功。
+
+### 下载产物
+
+通过 GitHub CLI gh run download 按 artifact 名称下载，未使用浏览器。所有产物位于被 Git 忽略的 build 目录，不纳入 Git：
+
+| 产物 | 本地路径 | 大小 | SHA-256 |
+|---|---|---:|---|
+| TrollStore HealthKit IPA | build/HealthMi-MetricKit-build5-run-45934717225/trollstore/HealthMi-trollstore-healthkit.ipa | 2,214,215 字节 | ca9c7ef39abe2586b91ce49db6decc2661cab41ee7d3318fd228049a65389e4a |
+| Unsigned IPA | build/HealthMi-MetricKit-build5-run-45934717225/unsigned/HealthMi-unsigned.ipa | 2,148,551 字节 | 61adb07874648f52fdbf92d1b4e63540acb8ea2f78ee586c34f37cca688dcbde |
+| 匹配 dSYM ZIP | build/HealthMi-MetricKit-build5-run-45934717225/dsym/HealthMi-dSYMs.zip | 2,300,657 字节 | 303fae1f43c4ca8cb4d665f92af0121e338668a39b380d6859788720a0d04106 |
+
+### IPA 与 dSYM 核验
+
+本地 Python zipfile 完整性检查通过；读取两个 IPA 的 Info.plist，并解析 IPA 主程序与 dSYM DWARF 文件的 Mach-O header 和 LC_UUID：
+
+- 两个 IPA 均为 Bundle ID com.healthmi.HealthMi、版本 1.1.0 (5)、最低系统版本 16.0、平台 iphoneos；HealthKit 读写用途说明均存在。
+- 两个主程序均为 arm64；Mach-O minimum OS 为 16.0.0。TrollStore IPA 主程序 UUID 为 95F386CF-376F-32D7-9A61-1792938EC3A8。
+- 两个包均有 Metadata.appintents。root.ssu.yaml 和 extract.actionsdata 包含 SyncHealthDataIntent、QueryLatestSyncStatusIntent；两项动作的包内元数据均标记 isDiscoverable=true、openAppWhenRun=false。此项仅证明 Xcode 生成的 App Intents metadata 随包存在，不证明 iOS 16.3 Shortcuts UI 会展示每个动作。
+- TrollStore artifact 的 entitlement-report.txt 由 workflow 对打包后的 Mach-O 执行 ldid -e 后生成，报告确认 LC_CODE_SIGNATURE 存在、com.apple.developer.healthkit=true、application-identifier=TROLLTROLL.*、team identifier TROLLTROLL、get-task-allow=true、Keychain access groups 含 TROLLTROLL.* 和 com.apple.token；HealthKit share/update usage descriptions 存在，embedded.mobileprovision 不存在。
+- Unsigned IPA 单独保留给用户后续签名使用；TrollStore entitlement 结论只适用于 HealthMi-trollstore-healthkit.ipa，不应套用于 unsigned IPA。
+- dSYM ZIP 内含 HealthMi.app.dSYM/Contents/Resources/DWARF/HealthMi。独立解析所得架构为 arm64，UUID 与两个 IPA 主程序均为 95F386CF-376F-32D7-9A61-1792938EC3A8；这也与 workflow 的 dwarfdump UUID 比对及 dsym-report.txt 一致。
+- 本地重算的 TrollStore IPA 与 dSYM SHA-256 和 workflow 报告一致；unsigned IPA 的 SHA-256 由本地核验记录。
+
+### 验证边界
+
+此次验证覆盖 GitHub Release 编译、IPA/ZIP 结构、Info.plist、Mach-O 架构与部署版本、App Intents metadata、TrollStore entitlements 和 dSYM UUID。Windows 工作区没有 Xcode，本轮没有运行测试套件或 iOS Simulator，也没有在 iOS 16.3 真机上安装该 build 5。MetricKit 是否以及何时投递报告由 iOS 决定，需在实际设备运行后观察；Shortcuts 是否索引并展示“查询同步状态”也仍需真机确认。

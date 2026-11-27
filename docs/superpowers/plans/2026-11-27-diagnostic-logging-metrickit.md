@@ -1,6 +1,6 @@
 # HealthMi 自动诊断日志与 MetricKit Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox syntax for tracking.
 
 **Goal:** 在 iOS 16 兼容范围内增强 HealthMi 自动诊断日志，接收并本机保存 MetricKit 诊断报告，提供应用内查看、复制和主动导出，并生成包含匹配 dSYM 的新 TrollStore IPA。
 
@@ -92,10 +92,10 @@
 - [x] 记录 Apple 官方文档中旧订阅接口、JSON 序列化和 past payload 生命周期限制；记录设计、每个本地 commit SHA、静态核查结果。
 - [x] 仅对 `personal` 远程 `lu1ul/HealthMi-private` 推送已提交代码以触发 `main` workflow；确认实际 push URL 后再执行，绝不 push `origin`。
 - [x] 使用已认证的 GitHub CLI `gh` 检查首个构建 run `45933997852` 并读取失败日志；未下载 artifact，因为该 run 编译失败且没有产物。
-- [ ] 编译成功后使用 `gh` 下载 `HealthMi-trollstore-healthkit-ipa`、`HealthMi-unsigned-ipa` 与 `HealthMi-dSYMs`；不使用浏览器下载。
-- [ ] 核验 IPA 的 `com.healthmi.HealthMi`、版本 `1.1.0 (5)`、`MinimumOSVersion` 16.0、arm64、HealthKit/TrollStore/Keychain entitlements、HealthKit usage strings、App Intents metadata；核验 dSYM UUID 与 IPA 内可执行文件一致。
-- [ ] 对 IPA 与 dSYM 计算 SHA-256，记录 workflow run ID、提交 SHA、产物路径、哈希、核验结果和 MetricKit 设备投递限制。
-- [ ] Commit: `docs: record MetricKit IPA build verification`
+- [x] 编译成功后使用 `gh` 下载 `HealthMi-trollstore-healthkit-ipa`、`HealthMi-unsigned-ipa` 与 `HealthMi-dSYMs`；不使用浏览器下载。
+- [x] 核验 IPA 的 `com.healthmi.HealthMi`、版本 `1.1.0 (5)`、`MinimumOSVersion` 16.0、arm64、HealthKit/TrollStore/Keychain entitlements、HealthKit usage strings、App Intents metadata；核验 dSYM UUID 与 IPA 内可执行文件一致。
+- [x] 对 IPA 与 dSYM 计算 SHA-256，记录 workflow run ID、提交 SHA、产物路径、哈希、核验结果和 MetricKit 设备投递限制。
+- [x] Commit: `docs: record MetricKit IPA build verification`
 
 ## 验收限制
 
